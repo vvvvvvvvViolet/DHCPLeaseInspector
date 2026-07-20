@@ -1,22 +1,54 @@
-"""Runs the combined per-computer health check (ping, domain, DHCP, WSUS, OS)."""
+"""Per-computer probes: fast DNS/ping sweep, then a WMI check over DCOM."""
 import json
+import socket
 import subprocess
+import sys
 
+from . import config
 from .process_utils import run_hidden
 
-# WMI queries run even when ping fails: many networks block ICMP while WMI
-# still works, so ping alone must not decide "offline". FirstError keeps the
-# first WMI failure message (e.g. Access Denied) so the UI can distinguish
-# "no rights" from "machine down".
+
+def resolve_and_ping(computer_name: str, ping_timeout_ms: int | None = None) -> dict:
+    """Phase-1 probe: resolve the name in DNS, then send one ping.
+
+    Distinguishes "no DNS record" (machine likely decommissioned) from
+    "resolves but doesn't answer" (off / firewalled). Never raises.
+    """
+    if ping_timeout_ms is None:
+        ping_timeout_ms = config.get_settings().ping_timeout_ms
+
+    try:
+        ip = socket.gethostbyname(computer_name)
+    except OSError:
+        return {"ip": None, "dns_ok": False, "ping": False, "error": "DNS lookup failed"}
+
+    if sys.platform == "win32":
+        args = ["ping", "-n", "1", "-w", str(ping_timeout_ms), ip]
+    else:
+        args = ["ping", "-c", "1", "-W", str(max(ping_timeout_ms // 1000, 1)), ip]
+
+    try:
+        result = run_hidden(args, timeout=ping_timeout_ms / 1000 + 5)
+    except (subprocess.TimeoutExpired, OSError):
+        return {"ip": ip, "dns_ok": True, "ping": False, "error": None}
+
+    # On Windows, "Destination host unreachable" still exits 0 — a real reply
+    # always carries a TTL.
+    ok = result.returncode == 0
+    if ok and sys.platform == "win32":
+        ok = "TTL=" in (result.stdout or "").upper()
+    return {"ip": ip, "dns_ok": True, "ping": ok, "error": None}
+
+
 # The computer name is prepended as a $ComputerName assignment (see
 # _build_command). We deliberately do NOT use `param(...)` + a trailing
 # `-ComputerName` argument: with `powershell -Command "<script>"`, anything
 # after the script string is treated as command text, not bound to param(),
 # so $ComputerName would come back null and every machine would fail.
+# Ping is handled in Python (resolve_and_ping); this script is WMI-only.
 _CHECK_SCRIPT = r"""
 $result = [ordered]@{
     ComputerName = $ComputerName
-    Ping = $false
     WmiOk = $false
     PartOfDomain = $null
     Domain = $null
@@ -30,12 +62,6 @@ function Note-Error($err) {
     if ($null -eq $result.FirstError) {
         $result.FirstError = ($err | Out-String).Trim()
     }
-}
-
-try {
-    $result.Ping = [bool](Test-Connection -ComputerName $ComputerName -Count 1 -Quiet -ErrorAction Stop)
-} catch {
-    $result.Ping = $false
 }
 
 # Query over DCOM, not the CIM default (WS-Man/WinRM): WinRM is rarely
@@ -57,7 +83,7 @@ if ($session) {
     } catch { Note-Error $_ }
 
     # Only keep probing once the first WMI call proves the host answers, so a
-    # dead machine costs one timed-out call, not four.
+    # dead machine costs one timed-out call, not three.
     if ($result.WmiOk) {
         try {
             $os = Get-CimInstance -CimSession $session -ClassName Win32_OperatingSystem -OperationTimeoutSec 15 -ErrorAction Stop
@@ -82,7 +108,6 @@ $result | ConvertTo-Json -Compress
 def _failed_result(computer_name: str, error: str) -> dict:
     return {
         "computer_name": computer_name,
-        "ping": False,
         "wmi_ok": False,
         "part_of_domain": None,
         "domain": None,
@@ -102,12 +127,14 @@ def _build_command(computer_name: str) -> list[str]:
     return ["powershell", "-NoProfile", "-NonInteractive", "-Command", script]
 
 
-def check_computer(computer_name: str, timeout: float = 60.0) -> dict:
-    """Runs every check for a single computer in one PowerShell round-trip.
+def check_computer(computer_name: str, timeout: float | None = None) -> dict:
+    """Runs the WMI checks for a single computer in one PowerShell round-trip.
 
     Never raises: timeouts and PowerShell failures come back as a result
     dict with the "error" field set, so a bad machine can't abort a scan.
     """
+    if timeout is None:
+        timeout = float(config.get_settings().wmi_timeout_s)
     try:
         result = run_hidden(_build_command(computer_name), timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -126,7 +153,6 @@ def check_computer(computer_name: str, timeout: float = 60.0) -> dict:
     wmi_ok = bool(data.get("WmiOk"))
     return {
         "computer_name": data.get("ComputerName", computer_name),
-        "ping": bool(data.get("Ping")),
         "wmi_ok": wmi_ok,
         "part_of_domain": data.get("PartOfDomain"),
         "domain": data.get("Domain"),

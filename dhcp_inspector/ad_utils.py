@@ -15,12 +15,16 @@ def _build_script(name_filter: str) -> str:
         ad_filter = "*"
     # Pull the facts the domain check needs straight from AD, so the Domain
     # column is populated even for machines we can't reach over WMI.
+    # LastLogonTimestamp is the replicated attribute — it can lag up to ~14
+    # days behind the true last logon, but needs no per-DC querying.
     return (
         f'Get-ADComputer -Filter "{ad_filter}" '
-        "-Properties DNSHostName,OperatingSystem,Enabled,PasswordLastSet | "
+        "-Properties DNSHostName,OperatingSystem,Enabled,PasswordLastSet,LastLogonTimestamp | "
         "Select-Object Name,DistinguishedName,OperatingSystem,Enabled,"
         "@{Name='PasswordLastSet';Expression={ if ($_.PasswordLastSet) "
-        "{ $_.PasswordLastSet.ToString('o') } else { $null } }} | "
+        "{ $_.PasswordLastSet.ToString('o') } else { $null } }},"
+        "@{Name='LastLogon';Expression={ if ($_.LastLogonTimestamp) "
+        "{ [DateTime]::FromFileTime($_.LastLogonTimestamp).ToString('o') } else { $null } }} | "
         "ConvertTo-Json -Compress"
     )
 
@@ -77,5 +81,6 @@ def load_ad_computers(name_filter: str = "") -> list[dict]:
             "ad_os": entry.get("OperatingSystem"),
             "enabled": entry.get("Enabled"),
             "password_last_set": entry.get("PasswordLastSet"),
+            "last_logon": entry.get("LastLogon"),
         })
     return records

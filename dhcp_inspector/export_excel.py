@@ -5,6 +5,7 @@ _STATUS_FILLS = {
     "Domain Issue": "FFF9C4",   # yellow
     "Offline": "FFCDD2",        # red
     "Error": "FFCDD2",
+    "No DNS": "FFCDD2",
 }
 
 
