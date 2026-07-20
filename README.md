@@ -40,6 +40,14 @@ Single-page UI with three buttons:
   `Error` / `No DNS`, so a follow-up pass doesn't re-do the whole fleet.
 - **Export Excel** — saves the table to an `.xlsx` report, following the
   on-screen sort order and status filter, with rows colored by status.
+- **Credentials** — optionally run the WMI checks as a different account
+  (e.g. a domain admin) instead of the user who launched the app. This is
+  usually what makes the DHCP / OS / Uptime columns populate: without
+  local-admin rights on the target the WMI calls come back Access Denied.
+  The username/password are held in memory for the session only — never
+  written to settings, history, or the command line; they're passed to
+  PowerShell through an environment variable and turned into a
+  `PSCredential` for `New-CimSession`.
 - **Settings** — stale-password threshold, ping/WMI parallelism and
   timeouts, and whether to attempt WMI on ping-failed machines (off by
   default; turn on to find hosts that block ICMP but allow WMI). Saved to
@@ -55,8 +63,9 @@ timeout) as a tooltip.
 All remote queries go through WMI over **DCOM** (a CIM session with
 `-Protocol Dcom`), not WS-Man/WinRM, so no `winrm quickconfig` / PSRemoting
 setup is required on the target machines — just DCOM/WMI reachability
-(firewall) and admin rights. Each call has a 15-second operation timeout so
-offline machines fail fast. Every PowerShell/cmd call runs with its console
+(firewall) and admin rights (see **Credentials** above if the current user
+lacks them). Each call has a 15-second operation timeout so offline
+machines fail fast. Every PowerShell/cmd call runs with its console
 window hidden (`CREATE_NO_WINDOW`), so nothing flashes on screen while
 scanning.
 

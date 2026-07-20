@@ -101,6 +101,56 @@ class SettingsDialog(QDialog):
         ))
 
 
+class CredentialsDialog(QDialog):
+    """Collects an alternate account for the remote WMI connection.
+
+    Credentials live only in memory for the session — they are never written
+    to settings, history, or the command line.
+    """
+
+    def __init__(self, credential: tuple[str, str] | None = None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("WMI Credentials")
+
+        form = QFormLayout(self)
+
+        self.enabled = QCheckBox("Use alternate credentials for WMI checks")
+        self.enabled.setChecked(credential is not None)
+        form.addRow(self.enabled)
+
+        self.username = QLineEdit(credential[0] if credential else "")
+        self.username.setPlaceholderText(r"DOMAIN\admin  or  admin@domain")
+        form.addRow("Username:", self.username)
+
+        self.password = QLineEdit(credential[1] if credential else "")
+        self.password.setEchoMode(QLineEdit.Password)
+        form.addRow("Password:", self.password)
+
+        note = QLabel(
+            "Held in memory for this session only — not saved to disk or the\n"
+            "command line. Needs local-admin rights on the target machines."
+        )
+        note.setStyleSheet("color: gray;")
+        form.addRow(note)
+
+        self.enabled.toggled.connect(self._sync_enabled)
+        self._sync_enabled(self.enabled.isChecked())
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+
+    def _sync_enabled(self, on: bool):
+        self.username.setEnabled(on)
+        self.password.setEnabled(on)
+
+    def credential(self) -> tuple[str, str] | None:
+        if not self.enabled.isChecked() or not self.username.text().strip():
+            return None
+        return (self.username.text().strip(), self.password.text())
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -111,6 +161,7 @@ class MainWindow(QMainWindow):
         self._ad_info = {}            # computer name -> AD record
         self._status_counts = Counter()  # live counts for the summary line
         self._prev_run = None         # snapshot loaded when a scan starts
+        self._credential = None       # (username, password) in memory only
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -123,6 +174,8 @@ class MainWindow(QMainWindow):
         ad_row.addWidget(self.ad_filter_edit, 1)
         self.load_ad_btn = QPushButton("Load AD")
         ad_row.addWidget(self.load_ad_btn)
+        self.credentials_btn = QPushButton("Credentials")
+        ad_row.addWidget(self.credentials_btn)
         self.settings_btn = QPushButton("Settings")
         ad_row.addWidget(self.settings_btn)
         layout.addLayout(ad_row)
@@ -172,6 +225,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         self.load_ad_btn.clicked.connect(self.on_load_ad)
+        self.credentials_btn.clicked.connect(self.on_credentials)
         self.settings_btn.clicked.connect(self.on_settings)
         self.check_status_btn.clicked.connect(self.on_check_status)
         self.recheck_btn.clicked.connect(self.on_recheck_failed)
@@ -195,6 +249,20 @@ class MainWindow(QMainWindow):
         self.summary_label.setText("  |  ".join(parts))
 
     # ----- actions -----
+
+    def on_credentials(self):
+        dialog = CredentialsDialog(self._credential, self)
+        if dialog.exec_() == QDialog.Accepted:
+            self._credential = dialog.credential()
+            self._refresh_credentials_button()
+
+    def _refresh_credentials_button(self):
+        if self._credential:
+            self.credentials_btn.setText("Credentials ✓")
+            self.credentials_btn.setToolTip(f"WMI runs as {self._credential[0]}")
+        else:
+            self.credentials_btn.setText("Credentials")
+            self.credentials_btn.setToolTip("WMI runs as the current user")
 
     def on_settings(self):
         dialog = SettingsDialog(self)
@@ -257,7 +325,7 @@ class MainWindow(QMainWindow):
         self.progress.setMaximum(len(targets))
         self.phase_label.setText("Ping sweep")
 
-        self._worker = ScanWorker(targets, self._ad_info)
+        self._worker = ScanWorker(targets, self._ad_info, self._credential)
         self._worker.row_ready.connect(self.on_row_ready)
         self._worker.progress.connect(self.on_progress)
         self._worker.finished_all.connect(self.on_scan_finished)

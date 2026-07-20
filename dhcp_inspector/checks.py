@@ -1,11 +1,18 @@
 """Per-computer probes: fast DNS/ping sweep, then a WMI check over DCOM."""
 import json
+import os
 import socket
 import subprocess
 import sys
 
 from . import config
 from .process_utils import run_hidden
+
+# Alternate credentials are handed to PowerShell through these env vars, not
+# the command line (which would show up in the process list) and never a
+# file. The child process gets its own copy; nothing is persisted.
+_CRED_USER_ENV = "DHCPINSPECT_USER"
+_CRED_PASS_ENV = "DHCPINSPECT_PASS"
 
 
 def resolve_and_ping(computer_name: str, ping_timeout_ms: int | None = None) -> dict:
@@ -71,7 +78,18 @@ function Note-Error($err) {
 $session = $null
 try {
     $opt = New-CimSessionOption -Protocol Dcom
-    $session = New-CimSession -ComputerName $ComputerName -SessionOption $opt -OperationTimeoutSec 15 -ErrorAction Stop
+    $cimArgs = @{
+        ComputerName        = $ComputerName
+        SessionOption       = $opt
+        OperationTimeoutSec = 15
+        ErrorAction         = 'Stop'
+    }
+    # Use alternate credentials only when the launcher supplied them.
+    if ($env:DHCPINSPECT_USER) {
+        $secpw = ConvertTo-SecureString $env:DHCPINSPECT_PASS -AsPlainText -Force
+        $cimArgs.Credential = New-Object System.Management.Automation.PSCredential($env:DHCPINSPECT_USER, $secpw)
+    }
+    $session = New-CimSession @cimArgs
 } catch { Note-Error $_ }
 
 if ($session) {
@@ -127,8 +145,28 @@ def _build_command(computer_name: str) -> list[str]:
     return ["powershell", "-NoProfile", "-NonInteractive", "-Command", script]
 
 
-def check_computer(computer_name: str, timeout: float | None = None) -> dict:
+def _credential_env(credential: tuple[str, str] | None) -> dict | None:
+    """Build the child-process environment carrying alternate credentials.
+
+    Returns None (inherit the parent env) when no credential is given.
+    """
+    if not credential or not credential[0]:
+        return None
+    env = dict(os.environ)
+    env[_CRED_USER_ENV] = credential[0]
+    env[_CRED_PASS_ENV] = credential[1] or ""
+    return env
+
+
+def check_computer(
+    computer_name: str,
+    timeout: float | None = None,
+    credential: tuple[str, str] | None = None,
+) -> dict:
     """Runs the WMI checks for a single computer in one PowerShell round-trip.
+
+    credential, when given, is a (username, password) pair used for the
+    remote WMI/DCOM connection instead of the caller's own identity.
 
     Never raises: timeouts and PowerShell failures come back as a result
     dict with the "error" field set, so a bad machine can't abort a scan.
@@ -136,7 +174,11 @@ def check_computer(computer_name: str, timeout: float | None = None) -> dict:
     if timeout is None:
         timeout = float(config.get_settings().wmi_timeout_s)
     try:
-        result = run_hidden(_build_command(computer_name), timeout=timeout)
+        result = run_hidden(
+            _build_command(computer_name),
+            timeout=timeout,
+            env=_credential_env(credential),
+        )
     except subprocess.TimeoutExpired:
         return _failed_result(computer_name, f"Timed out after {timeout:.0f}s")
     except OSError as exc:

@@ -11,7 +11,12 @@ class ScanWorker(QThread):
     progress = pyqtSignal(int, int, str)  # done, total, phase label
     finished_all = pyqtSignal()
 
-    def __init__(self, targets: list[tuple[int, str]], ad_info: dict | None = None):
+    def __init__(
+        self,
+        targets: list[tuple[int, str]],
+        ad_info: dict | None = None,
+        credential: tuple[str, str] | None = None,
+    ):
         """targets: (table row, computer name) pairs — any subset of the table."""
         super().__init__()
         self._targets = targets
@@ -19,6 +24,9 @@ class ScanWorker(QThread):
         # last_logon}); merged into each result so the domain check has AD
         # facts even when the machine can't be reached over WMI.
         self._ad_info = ad_info or {}
+        # (username, password) for the remote WMI connection, or None to use
+        # the launching user's own identity.
+        self._credential = credential
         self._stop_requested = False
 
     def stop(self):
@@ -44,7 +52,7 @@ class ScanWorker(QThread):
 
     def _wmi_one(self, computer: str) -> dict:
         try:
-            return checks.check_computer(computer)
+            return checks.check_computer(computer, credential=self._credential)
         except Exception as exc:
             return {"computer_name": computer, "wmi_ok": False, "error": str(exc)}
 

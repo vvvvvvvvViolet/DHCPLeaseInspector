@@ -2,7 +2,7 @@
 import subprocess
 
 
-def run_hidden(args, timeout=None):
+def run_hidden(args, timeout=None, env=None):
     startupinfo = None
     creationflags = 0
     if hasattr(subprocess, "STARTUPINFO"):
@@ -18,4 +18,5 @@ def run_hidden(args, timeout=None):
         timeout=timeout,
         startupinfo=startupinfo,
         creationflags=creationflags,
+        env=env,
     )
