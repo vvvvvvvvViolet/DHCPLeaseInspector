@@ -3,20 +3,32 @@ import json
 
 from .process_utils import run_hidden
 
-_LOAD_AD_SCRIPT = (
-    "Get-ADComputer -Filter * -Properties Name | "
-    "Select-Object -ExpandProperty Name | ConvertTo-Json -Compress"
-)
+def _build_script(name_filter: str) -> str:
+    if name_filter:
+        # PowerShell single-quoted string: escaping is just doubling quotes,
+        # which keeps a user-typed filter from breaking out of the -Filter
+        # expression.
+        escaped = name_filter.replace("'", "''")
+        ad_filter = f"Name -like '*{escaped}*'"
+    else:
+        ad_filter = "*"
+    return (
+        f'Get-ADComputer -Filter "{ad_filter}" -Properties Name | '
+        "Select-Object -ExpandProperty Name | ConvertTo-Json -Compress"
+    )
 
 
-def load_ad_computers() -> list[str]:
-    """Return every computer name found in Active Directory.
+def load_ad_computers(name_filter: str = "") -> list[str]:
+    """Return computer names found in Active Directory.
 
-    Requires the RSAT ActiveDirectory PowerShell module and enough rights
-    to query the domain.
+    name_filter, when given, becomes a substring match on the computer name
+    (Name -like '*<filter>*'), so a big domain can be narrowed before the
+    full query runs. Requires the RSAT ActiveDirectory PowerShell module and
+    enough rights to query the domain.
     """
     result = run_hidden(
-        ["powershell", "-NoProfile", "-NonInteractive", "-Command", _LOAD_AD_SCRIPT],
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+         _build_script(name_filter.strip())],
         timeout=60,
     )
     if result.returncode != 0:

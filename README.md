@@ -5,9 +5,13 @@ Single-page UI with three buttons:
 
 - **Load AD** — pulls the computer list from Active Directory
   (`Get-ADComputer`; requires the RSAT ActiveDirectory PowerShell module).
+  An optional name filter narrows the query (substring match) before it
+  hits a big domain.
 - **Check Status** — runs every check below for all loaded computers on a
-  background `QThread`, so the UI never freezes, and fills in the table
-  row by row as results come back:
+  background `QThread` with up to 15 machines scanned in parallel, so the
+  UI never freezes and large fleets finish quickly. A progress bar tracks
+  the scan and a **Cancel** button stops it mid-flight. Results fill in
+  row by row as they come back:
   - **Ping** — reachability
   - **Domain** — domain join status / domain name
   - **DHCP Server** — the DHCP server that leased the machine's active IP
@@ -16,7 +20,13 @@ Single-page UI with three buttons:
   - **Uptime** — time since last boot
   - **Score / Status** — composite readiness score (0-100) and a
     `Ready` / `Needs Attention` / `Offline` label
-- **Export Excel** — saves the current table to an `.xlsx` report.
+- **Export Excel** — saves the table to an `.xlsx` report, following the
+  on-screen sort order and status filter, with rows colored by status.
+
+Rows are color-coded (green = Ready, yellow = Needs Attention,
+red = Offline/Error), every column is click-to-sort, and a **Show**
+dropdown filters the table to one status. Hovering a failed row shows the
+underlying error (e.g. Access Denied vs timeout) as a tooltip.
 
 All remote queries go through CIM/WMI (`Get-CimInstance -ComputerName`), not
 WinRM, so no `Invoke-Command`/PSRemoting setup is required on target
