@@ -28,6 +28,27 @@ python main.py
 For the "Scan DHCP Servers" tab, run from an elevated command prompt /
 PowerShell (Run as Administrator).
 
+## Build a standalone .exe
+
+PyInstaller must run on Windows (it does not cross-compile), so pick one:
+
+**Option A — build locally on Windows:**
+
+```
+pip install -r requirements-dev.txt
+pyinstaller --onefile --windowed --name DHCPLeaseInspector main.py
+```
+
+The executable is created at `dist\DHCPLeaseInspector.exe`.
+
+**Option B — build via GitHub Actions (no Windows machine needed):**
+
+Every push to `main` or a `claude/**` branch triggers the
+`Build Windows EXE` workflow (`.github/workflows/build-exe.yml`), which
+builds on a `windows-latest` runner. You can also trigger it manually from
+the Actions tab ("Run workflow"). Download the built `.exe` from the run's
+**Artifacts** section (`DHCPLeaseInspector-exe`).
+
 ## Project layout
 
 ```
