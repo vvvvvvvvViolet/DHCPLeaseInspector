@@ -89,6 +89,7 @@ class MainWindow(QMainWindow):
     def on_row_ready(self, row: int, result: dict):
         score, status = scoring.compute_score(result)
         uptime = scoring.compute_uptime_str(result.get("last_boot"))
+        error = result.get("error")
 
         domain_cell = "-"
         if result.get("part_of_domain") is True:
@@ -98,7 +99,7 @@ class MainWindow(QMainWindow):
 
         values = [
             result["computer_name"],
-            "OK" if result["ping"] else "Fail",
+            "OK" if result.get("ping") else "Fail",
             domain_cell,
             result.get("dhcp_server") or "-",
             result.get("wsus") or "Not Configured",
@@ -108,7 +109,12 @@ class MainWindow(QMainWindow):
             status,
         ]
         for col, value in enumerate(values):
-            self.table.setItem(row, col, QTableWidgetItem(value))
+            item = QTableWidgetItem(value)
+            # Full failure reason (e.g. Access Denied vs timeout) lives in the
+            # tooltip so it isn't lost behind a bare "-" or "Offline".
+            if error:
+                item.setToolTip(error)
+            self.table.setItem(row, col, item)
 
     def on_scan_finished(self):
         self.check_status_btn.setEnabled(True)

@@ -17,9 +17,16 @@ class ScanWorker(QThread):
         self._stop_requested = True
 
     def run(self):
-        for row, computer in enumerate(self._computers):
-            if self._stop_requested:
-                break
-            result = checks.check_computer(computer)
-            self.row_ready.emit(row, result)
-        self.finished_all.emit()
+        try:
+            for row, computer in enumerate(self._computers):
+                if self._stop_requested:
+                    break
+                try:
+                    result = checks.check_computer(computer)
+                except Exception as exc:
+                    result = {"computer_name": computer, "ping": False, "error": str(exc)}
+                self.row_ready.emit(row, result)
+        finally:
+            # Always emitted, even if a check blows up — otherwise the GUI
+            # buttons stay disabled forever.
+            self.finished_all.emit()

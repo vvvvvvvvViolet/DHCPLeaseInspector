@@ -25,8 +25,11 @@ def compute_uptime_str(last_boot_iso: str | None) -> str:
 
 def compute_score(check: dict) -> tuple[int, str]:
     """Returns (score 0-100, status label) from a check_computer() result."""
-    if not check.get("ping"):
-        return 0, "Offline"
+    # WMI success counts as reachable too — many networks block ICMP ping
+    # while WMI still answers.
+    reachable = check.get("ping") or check.get("wmi_ok")
+    if not reachable:
+        return 0, ("Error" if check.get("error") else "Offline")
 
     score = 25  # reachable
 
