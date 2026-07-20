@@ -13,9 +13,13 @@ class ScanWorker(QThread):
     progress = pyqtSignal(int, int)  # done, total
     finished_all = pyqtSignal()
 
-    def __init__(self, computers: list[str]):
+    def __init__(self, computers: list[str], ad_info: dict | None = None):
         super().__init__()
         self._computers = computers
+        # name -> AD record ({domain, ad_os, enabled, password_last_set});
+        # merged into each result so the domain check has AD facts even when
+        # the machine can't be reached over WMI.
+        self._ad_info = ad_info or {}
         self._stop_requested = False
 
     def stop(self):
@@ -23,9 +27,16 @@ class ScanWorker(QThread):
 
     def _check_one(self, computer: str) -> dict:
         try:
-            return checks.check_computer(computer)
+            result = checks.check_computer(computer)
         except Exception as exc:
-            return {"computer_name": computer, "ping": False, "error": str(exc)}
+            result = {"computer_name": computer, "ping": False, "wmi_ok": False, "error": str(exc)}
+
+        ad = self._ad_info.get(computer, {})
+        result["ad_domain"] = ad.get("domain")
+        result["ad_os"] = ad.get("ad_os")
+        result["ad_enabled"] = ad.get("enabled")
+        result["ad_password_last_set"] = ad.get("password_last_set")
+        return result
 
     def run(self):
         total = len(self._computers)

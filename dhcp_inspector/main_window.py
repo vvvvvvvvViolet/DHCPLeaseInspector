@@ -23,34 +23,24 @@ from PyQt5.QtWidgets import (
 from . import ad_utils, export_excel, scoring
 from .worker import ScanWorker
 
-HEADERS = ["Computer", "Ping", "Domain", "DHCP Server", "WSUS", "OS Version", "Uptime", "Score", "Status"]
-_SCORE_COL = 7
-_STATUS_COL = 8
+HEADERS = ["Computer", "Ping", "Domain", "DHCP Server", "OS Version", "Uptime", "Status"]
+_STATUS_COL = 6
 
 _COLOR_GOOD = QColor("#c8e6c9")   # green  — Ready
-_COLOR_WARN = QColor("#fff9c4")   # yellow — Needs Attention
+_COLOR_WARN = QColor("#fff9c4")   # yellow — Domain Issue
 _COLOR_BAD = QColor("#ffcdd2")    # red    — Offline / Error
 
-_STATUS_FILTERS = ["All", "Ready", "Needs Attention", "Offline", "Error"]
-
-
-class _NumericItem(QTableWidgetItem):
-    """Table item that sorts by numeric value instead of as text."""
-
-    def __lt__(self, other):
-        try:
-            return float(self.text()) < float(other.text())
-        except ValueError:
-            return super().__lt__(other)
+_STATUS_FILTERS = ["All", "Ready", "Domain Issue", "Offline", "Error"]
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("DHCP Lease Inspector")
-        self.resize(980, 560)
+        self.resize(940, 560)
 
         self._worker = None
+        self._ad_info = {}  # computer name -> AD record
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -105,25 +95,33 @@ class MainWindow(QMainWindow):
     def on_load_ad(self):
         self.load_ad_btn.setEnabled(False)
         try:
-            computers = ad_utils.load_ad_computers(self.ad_filter_edit.text())
+            records = ad_utils.load_ad_computers(self.ad_filter_edit.text())
         except Exception as exc:
             QMessageBox.critical(self, "Load AD failed", str(exc))
             return
         finally:
             self.load_ad_btn.setEnabled(True)
 
+        self._ad_info = {r["name"]: r for r in records if r.get("name")}
+
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
-        for name in computers:
+        for record in records:
+            name = record.get("name")
+            if not name:
+                continue
             row = self.table.rowCount()
             self.table.insertRow(row)
             self.table.setItem(row, 0, QTableWidgetItem(name))
-            for col in range(1, len(HEADERS)):
+            # Pre-fill the Domain column straight from AD, so it's useful even
+            # before (or without) a live status scan.
+            self.table.setItem(row, 2, QTableWidgetItem(record.get("domain") or "-"))
+            for col in (1, 3, 4, 5, 6):
                 self.table.setItem(row, col, QTableWidgetItem("-"))
         self.table.setSortingEnabled(True)
         self.progress.setValue(0)
-        self.progress.setMaximum(max(len(computers), 1))
-        if not computers:
+        self.progress.setMaximum(max(len(self._ad_info), 1))
+        if not self._ad_info:
             QMessageBox.information(self, "Load AD", "No computers matched.")
 
     def on_check_status(self):
@@ -146,7 +144,7 @@ class MainWindow(QMainWindow):
         self.progress.setValue(0)
         self.progress.setMaximum(len(computers))
 
-        self._worker = ScanWorker(computers)
+        self._worker = ScanWorker(computers, self._ad_info)
         self._worker.row_ready.connect(self.on_row_ready)
         self._worker.progress.connect(self.on_progress)
         self._worker.finished_all.connect(self.on_scan_finished)
@@ -162,38 +160,30 @@ class MainWindow(QMainWindow):
         self.progress.setValue(done)
 
     @staticmethod
-    def _row_color(score: int, status: str) -> QColor:
+    def _status_color(status: str) -> QColor:
         if status in ("Offline", "Error"):
             return _COLOR_BAD
-        if score >= 75:
+        if status == "Ready":
             return _COLOR_GOOD
-        return _COLOR_WARN
+        return _COLOR_WARN  # Domain Issue
 
     def on_row_ready(self, row: int, result: dict):
-        score, status = scoring.compute_score(result)
+        status = scoring.compute_status(result)
         uptime = scoring.compute_uptime_str(result.get("last_boot"))
         error = result.get("error")
-        color = self._row_color(score, status)
-
-        domain_cell = "-"
-        if result.get("part_of_domain") is True:
-            domain_cell = result.get("domain") or "-"
-        elif result.get("part_of_domain") is False:
-            domain_cell = "Not Joined"
+        color = self._status_color(status)
 
         values = [
             result["computer_name"],
             "OK" if result.get("ping") else "Fail",
-            domain_cell,
+            scoring.domain_label(result),
             result.get("dhcp_server") or "-",
-            result.get("wsus") or "Not Configured",
-            result.get("os_version") or "-",
+            result.get("os_version") or result.get("ad_os") or "-",
             uptime,
-            str(score),
             status,
         ]
         for col, value in enumerate(values):
-            item = _NumericItem(value) if col == _SCORE_COL else QTableWidgetItem(value)
+            item = QTableWidgetItem(value)
             item.setBackground(color)
             # Full failure reason (e.g. Access Denied vs timeout) lives in the
             # tooltip so it isn't lost behind a bare "-" or "Offline".

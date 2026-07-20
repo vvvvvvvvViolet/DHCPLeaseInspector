@@ -1,49 +1,79 @@
-"""Turns a raw check result into an uptime string, a score, and a status."""
-from datetime import datetime
+"""Derives uptime, domain health, and an overall status from a check result."""
+from datetime import datetime, timezone
 
-_MAX_HEALTHY_UPTIME_DAYS = 30
+# Windows rotates a computer account's password every 30 days by default; a
+# machine that hasn't updated it in well over that is very likely off the
+# domain (imaged-and-forgotten, long offline, or broken secure channel).
+_STALE_PASSWORD_DAYS = 45
 
 
-def _parse_last_boot(last_boot_iso: str | None) -> datetime | None:
-    if not last_boot_iso:
+def _parse_dt(value: str | None) -> datetime | None:
+    if not value:
         return None
     try:
-        return datetime.fromisoformat(last_boot_iso)
+        return datetime.fromisoformat(value)
     except ValueError:
         return None
 
 
+def _now_like(other: datetime) -> datetime:
+    return datetime.now(other.tzinfo) if other.tzinfo else datetime.now()
+
+
 def compute_uptime_str(last_boot_iso: str | None) -> str:
-    last_boot = _parse_last_boot(last_boot_iso)
+    last_boot = _parse_dt(last_boot_iso)
     if last_boot is None:
         return "-"
-    now = datetime.now(last_boot.tzinfo) if last_boot.tzinfo else datetime.now()
-    delta = now - last_boot
+    delta = _now_like(last_boot) - last_boot
     hours = delta.seconds // 3600
     return f"{delta.days}d {hours}h"
 
 
-def compute_score(check: dict) -> tuple[int, str]:
-    """Returns (score 0-100, status label) from a check_computer() result."""
-    # WMI success counts as reachable too — many networks block ICMP ping
-    # while WMI still answers.
+def domain_health(check: dict) -> str:
+    """Assess the machine's domain standing purely from AD facts.
+
+    Returns "OK", "Disabled", "Stale", or "Unknown" (no AD data). This does
+    not need to reach the machine, so it works even when WMI is blocked.
+    """
+    if check.get("ad_enabled") is False:
+        return "Disabled"
+
+    pwd_set = _parse_dt(check.get("ad_password_last_set"))
+    if pwd_set is not None:
+        age_days = (_now_like(pwd_set) - pwd_set).days
+        if age_days > _STALE_PASSWORD_DAYS:
+            return "Stale"
+        return "OK"
+
+    # Live WMI can still confirm domain membership when AD data is absent.
+    if check.get("part_of_domain") is True:
+        return "OK"
+    if check.get("part_of_domain") is False:
+        return "Not Joined"
+    return "Unknown"
+
+
+def domain_label(check: dict) -> str:
+    """Text for the Domain column: the domain name plus a health note."""
+    domain = None
+    if check.get("part_of_domain") is not False:
+        domain = check.get("domain") or check.get("ad_domain")
+    elif check.get("part_of_domain") is False:
+        return "Not Joined"
+
+    health = domain_health(check)
+    base = domain or "-"
+    if health in ("Disabled", "Stale", "Not Joined"):
+        return f"{base} ({health})"
+    return base
+
+
+def compute_status(check: dict) -> str:
+    """Overall row status combining reachability and domain health."""
     reachable = check.get("ping") or check.get("wmi_ok")
     if not reachable:
-        return 0, ("Error" if check.get("error") else "Offline")
+        return "Error" if check.get("error") else "Offline"
 
-    score = 25  # reachable
-
-    if check.get("part_of_domain"):
-        score += 25
-
-    if check.get("wsus"):
-        score += 25
-
-    last_boot = _parse_last_boot(check.get("last_boot"))
-    if last_boot is not None:
-        now = datetime.now(last_boot.tzinfo) if last_boot.tzinfo else datetime.now()
-        if (now - last_boot).days < _MAX_HEALTHY_UPTIME_DAYS:
-            score += 25
-
-    status = "Ready" if score >= 75 else "Needs Attention"
-    return score, status
+    if domain_health(check) in ("Disabled", "Stale", "Not Joined"):
+        return "Domain Issue"
+    return "Ready"

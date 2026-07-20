@@ -1,9 +1,9 @@
 """Exports the results table to an .xlsx file."""
 
 _STATUS_FILLS = {
-    "Ready": "C8E6C9",            # green
-    "Needs Attention": "FFF9C4",  # yellow
-    "Offline": "FFCDD2",          # red
+    "Ready": "C8E6C9",          # green
+    "Domain Issue": "FFF9C4",   # yellow
+    "Offline": "FFCDD2",        # red
     "Error": "FFCDD2",
 }
 

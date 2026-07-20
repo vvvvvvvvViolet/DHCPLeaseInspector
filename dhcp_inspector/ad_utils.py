@@ -1,7 +1,8 @@
-"""Loads the computer list from Active Directory."""
+"""Loads the computer list (and per-computer AD facts) from Active Directory."""
 import json
 
 from .process_utils import run_hidden
+
 
 def _build_script(name_filter: str) -> str:
     if name_filter:
@@ -12,24 +13,45 @@ def _build_script(name_filter: str) -> str:
         ad_filter = f"Name -like '*{escaped}*'"
     else:
         ad_filter = "*"
+    # Pull the facts the domain check needs straight from AD, so the Domain
+    # column is populated even for machines we can't reach over WMI.
     return (
-        f'Get-ADComputer -Filter "{ad_filter}" -Properties Name | '
-        "Select-Object -ExpandProperty Name | ConvertTo-Json -Compress"
+        f'Get-ADComputer -Filter "{ad_filter}" '
+        "-Properties DNSHostName,OperatingSystem,Enabled,PasswordLastSet | "
+        "Select-Object Name,DistinguishedName,OperatingSystem,Enabled,"
+        "@{Name='PasswordLastSet';Expression={ if ($_.PasswordLastSet) "
+        "{ $_.PasswordLastSet.ToString('o') } else { $null } }} | "
+        "ConvertTo-Json -Compress"
     )
 
 
-def load_ad_computers(name_filter: str = "") -> list[str]:
-    """Return computer names found in Active Directory.
+def _domain_from_dn(distinguished_name: str | None) -> str | None:
+    """Turn a computer DN into its DNS domain, e.g.
+    'CN=PC1,OU=Lab,DC=corp,DC=example,DC=com' -> 'corp.example.com'.
+    """
+    if not distinguished_name:
+        return None
+    parts = [
+        piece[3:]
+        for piece in distinguished_name.split(",")
+        if piece.strip().upper().startswith("DC=")
+    ]
+    return ".".join(parts) if parts else None
 
-    name_filter, when given, becomes a substring match on the computer name
-    (Name -like '*<filter>*'), so a big domain can be narrowed before the
+
+def load_ad_computers(name_filter: str = "") -> list[dict]:
+    """Return per-computer AD records found in Active Directory.
+
+    Each record: {name, domain, ad_os, enabled, password_last_set}. The
+    name_filter, when given, is a substring match on the computer name
+    (Name -like '*<filter>*') so a big domain can be narrowed before the
     full query runs. Requires the RSAT ActiveDirectory PowerShell module and
-    enough rights to query the domain.
+    rights to query the domain.
     """
     result = run_hidden(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command",
          _build_script(name_filter.strip())],
-        timeout=60,
+        timeout=120,
     )
     if result.returncode != 0:
         raise RuntimeError(
@@ -44,6 +66,16 @@ def load_ad_computers(name_filter: str = "") -> list[str]:
         return []
 
     data = json.loads(output)
-    if isinstance(data, str):
-        return [data]
-    return list(data)
+    if isinstance(data, dict):  # a single computer isn't wrapped in a list
+        data = [data]
+
+    records = []
+    for entry in data:
+        records.append({
+            "name": entry.get("Name"),
+            "domain": _domain_from_dn(entry.get("DistinguishedName")),
+            "ad_os": entry.get("OperatingSystem"),
+            "enabled": entry.get("Enabled"),
+            "password_last_set": entry.get("PasswordLastSet"),
+        })
+    return records

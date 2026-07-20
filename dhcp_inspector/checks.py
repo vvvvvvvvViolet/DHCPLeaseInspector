@@ -23,7 +23,6 @@ $result = [ordered]@{
     DHCPServer = $null
     OSVersion = $null
     LastBoot = $null
-    WSUS = $null
     FirstError = $null
 }
 
@@ -71,16 +70,6 @@ if ($session) {
                 -Filter "IPEnabled=True AND DHCPEnabled=True" -OperationTimeoutSec 15 -ErrorAction Stop | Select-Object -First 1
             $result.DHCPServer = $nic.DHCPServer
         } catch { Note-Error $_ }
-
-        try {
-            $regProv = Get-CimInstance -CimSession $session -Namespace 'root\default' -ClassName StdRegProv -OperationTimeoutSec 15 -ErrorAction Stop
-            $val = Invoke-CimMethod -InputObject $regProv -MethodName GetStringValue -Arguments @{
-                hDefKey     = 2147483650
-                sSubKeyName = "SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"
-                sValueName  = "WUServer"
-            } -OperationTimeoutSec 15 -ErrorAction Stop
-            $result.WSUS = $val.sValue
-        } catch { Note-Error $_ }
     }
 
     Remove-CimSession $session -ErrorAction SilentlyContinue
@@ -100,7 +89,6 @@ def _failed_result(computer_name: str, error: str) -> dict:
         "dhcp_server": None,
         "os_version": None,
         "last_boot": None,
-        "wsus": None,
         "error": error,
     }
 
@@ -145,7 +133,6 @@ def check_computer(computer_name: str, timeout: float = 60.0) -> dict:
         "dhcp_server": data.get("DHCPServer"),
         "os_version": data.get("OSVersion"),
         "last_boot": data.get("LastBoot"),
-        "wsus": data.get("WSUS"),
         # Surface the WMI error only when nothing succeeded — a machine that
         # answered WMI but denied one sub-query is still a usable result.
         "error": None if wmi_ok else data.get("FirstError"),
