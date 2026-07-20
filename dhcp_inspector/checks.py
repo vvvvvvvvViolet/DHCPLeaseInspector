@@ -8,8 +8,12 @@ from .process_utils import run_hidden
 # still works, so ping alone must not decide "offline". FirstError keeps the
 # first WMI failure message (e.g. Access Denied) so the UI can distinguish
 # "no rights" from "machine down".
+# The computer name is prepended as a $ComputerName assignment (see
+# _build_command). We deliberately do NOT use `param(...)` + a trailing
+# `-ComputerName` argument: with `powershell -Command "<script>"`, anything
+# after the script string is treated as command text, not bound to param(),
+# so $ComputerName would come back null and every machine would fail.
 _CHECK_SCRIPT = r"""
-param($ComputerName)
 $result = [ordered]@{
     ComputerName = $ComputerName
     Ping = $false
@@ -35,36 +39,51 @@ try {
     $result.Ping = $false
 }
 
+# Query over DCOM, not the CIM default (WS-Man/WinRM): WinRM is rarely
+# enabled on ordinary domain workstations, whereas DCOM/WMI works out of
+# the box wherever the firewall allows it. -OperationTimeoutSec bounds each
+# call so a dead or unreachable host fails fast instead of hanging on RPC.
+$session = $null
 try {
-    $cs = Get-CimInstance -ComputerName $ComputerName -ClassName Win32_ComputerSystem -ErrorAction Stop
-    $result.WmiOk = $true
-    $result.PartOfDomain = [bool]$cs.PartOfDomain
-    $result.Domain = $cs.Domain
+    $opt = New-CimSessionOption -Protocol Dcom
+    $session = New-CimSession -ComputerName $ComputerName -SessionOption $opt -OperationTimeoutSec 15 -ErrorAction Stop
 } catch { Note-Error $_ }
 
-if ($result.Ping -or $result.WmiOk) {
+if ($session) {
     try {
-        $os = Get-CimInstance -ComputerName $ComputerName -ClassName Win32_OperatingSystem -ErrorAction Stop
+        $cs = Get-CimInstance -CimSession $session -ClassName Win32_ComputerSystem -OperationTimeoutSec 15 -ErrorAction Stop
         $result.WmiOk = $true
-        $result.OSVersion = $os.Caption
-        $result.LastBoot = $os.LastBootUpTime.ToString("o")
+        $result.PartOfDomain = [bool]$cs.PartOfDomain
+        $result.Domain = $cs.Domain
     } catch { Note-Error $_ }
 
-    try {
-        $nic = Get-CimInstance -ComputerName $ComputerName -ClassName Win32_NetworkAdapterConfiguration `
-            -Filter "IPEnabled=True AND DHCPEnabled=True" -ErrorAction Stop | Select-Object -First 1
-        $result.DHCPServer = $nic.DHCPServer
-    } catch { Note-Error $_ }
+    # Only keep probing once the first WMI call proves the host answers, so a
+    # dead machine costs one timed-out call, not four.
+    if ($result.WmiOk) {
+        try {
+            $os = Get-CimInstance -CimSession $session -ClassName Win32_OperatingSystem -OperationTimeoutSec 15 -ErrorAction Stop
+            $result.OSVersion = $os.Caption
+            $result.LastBoot = $os.LastBootUpTime.ToString("o")
+        } catch { Note-Error $_ }
 
-    try {
-        $regProv = Get-CimInstance -ComputerName $ComputerName -Namespace 'root\default' -ClassName StdRegProv -ErrorAction Stop
-        $val = Invoke-CimMethod -InputObject $regProv -MethodName GetStringValue -Arguments @{
-            hDefKey     = 2147483650
-            sSubKeyName = "SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"
-            sValueName  = "WUServer"
-        } -ErrorAction Stop
-        $result.WSUS = $val.sValue
-    } catch { Note-Error $_ }
+        try {
+            $nic = Get-CimInstance -CimSession $session -ClassName Win32_NetworkAdapterConfiguration `
+                -Filter "IPEnabled=True AND DHCPEnabled=True" -OperationTimeoutSec 15 -ErrorAction Stop | Select-Object -First 1
+            $result.DHCPServer = $nic.DHCPServer
+        } catch { Note-Error $_ }
+
+        try {
+            $regProv = Get-CimInstance -CimSession $session -Namespace 'root\default' -ClassName StdRegProv -OperationTimeoutSec 15 -ErrorAction Stop
+            $val = Invoke-CimMethod -InputObject $regProv -MethodName GetStringValue -Arguments @{
+                hDefKey     = 2147483650
+                sSubKeyName = "SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"
+                sValueName  = "WUServer"
+            } -OperationTimeoutSec 15 -ErrorAction Stop
+            $result.WSUS = $val.sValue
+        } catch { Note-Error $_ }
+    }
+
+    Remove-CimSession $session -ErrorAction SilentlyContinue
 }
 
 $result | ConvertTo-Json -Compress
@@ -86,6 +105,15 @@ def _failed_result(computer_name: str, error: str) -> dict:
     }
 
 
+def _build_command(computer_name: str) -> list[str]:
+    # Embed the name as a single-quoted PowerShell literal (doubling any
+    # embedded quote) instead of relying on param binding, which doesn't work
+    # through `powershell -Command`.
+    escaped = computer_name.replace("'", "''")
+    script = f"$ComputerName = '{escaped}'\n" + _CHECK_SCRIPT
+    return ["powershell", "-NoProfile", "-NonInteractive", "-Command", script]
+
+
 def check_computer(computer_name: str, timeout: float = 60.0) -> dict:
     """Runs every check for a single computer in one PowerShell round-trip.
 
@@ -93,13 +121,7 @@ def check_computer(computer_name: str, timeout: float = 60.0) -> dict:
     dict with the "error" field set, so a bad machine can't abort a scan.
     """
     try:
-        result = run_hidden(
-            [
-                "powershell", "-NoProfile", "-NonInteractive", "-Command", _CHECK_SCRIPT,
-                "-ComputerName", computer_name,
-            ],
-            timeout=timeout,
-        )
+        result = run_hidden(_build_command(computer_name), timeout=timeout)
     except subprocess.TimeoutExpired:
         return _failed_result(computer_name, f"Timed out after {timeout:.0f}s")
     except OSError as exc:

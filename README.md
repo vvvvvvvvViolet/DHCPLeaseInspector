@@ -28,11 +28,13 @@ red = Offline/Error), every column is click-to-sort, and a **Show**
 dropdown filters the table to one status. Hovering a failed row shows the
 underlying error (e.g. Access Denied vs timeout) as a tooltip.
 
-All remote queries go through CIM/WMI (`Get-CimInstance -ComputerName`), not
-WinRM, so no `Invoke-Command`/PSRemoting setup is required on target
-machines — just WMI reachability and admin rights. Every PowerShell/cmd
-call runs with its console window hidden (`CREATE_NO_WINDOW`), so nothing
-flashes on screen while scanning.
+All remote queries go through WMI over **DCOM** (a CIM session with
+`-Protocol Dcom`), not WS-Man/WinRM, so no `winrm quickconfig` / PSRemoting
+setup is required on the target machines — just DCOM/WMI reachability
+(firewall) and admin rights. Each call has a 15-second operation timeout so
+offline machines fail fast. Every PowerShell/cmd call runs with its console
+window hidden (`CREATE_NO_WINDOW`), so nothing flashes on screen while
+scanning.
 
 ## Requirements
 
