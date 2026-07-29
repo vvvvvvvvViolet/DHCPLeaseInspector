@@ -32,7 +32,12 @@ Single-page UI with three buttons:
   - **Last Logon** — the machine's last AD logon date (from the replicated
     `LastLogonTimestamp`, which can lag up to ~14 days) — separates
     "went offline yesterday" from "dead for months, decommission it"
-  - **Status** — `Ready` / `Domain Issue` / `Offline` / `Error` / `No DNS`
+  - **Last Patch** — the install date of the newest hotfix
+    (`Win32_QuickFixEngineering`); the tooltip lists the most recent KB
+    IDs. A machine whose newest patch is older than the overdue threshold
+    is flagged `Patch Overdue`.
+  - **Status** — `Ready` / `Domain Issue` / `Patch Overdue` / `Offline` /
+    `Error` / `No DNS`
   - **Change** — what changed vs the previous scan, e.g. `Ready → Offline`
     or `New`. Each completed scan is saved (last 30 runs kept) in the
     per-user app-data folder, and the next scan compares against it.
@@ -48,13 +53,13 @@ Single-page UI with three buttons:
   written to settings, history, or the command line; they're passed to
   PowerShell through an environment variable and turned into a
   `PSCredential` for `New-CimSession`.
-- **Settings** — stale-password threshold, ping/WMI parallelism and
-  timeouts, and whether to attempt WMI on ping-failed machines (off by
-  default; turn on to find hosts that block ICMP but allow WMI). Saved to
-  `%LOCALAPPDATA%\DHCPLeaseInspector\settings.json`.
+- **Settings** — stale-password and patch-overdue thresholds, ping/WMI
+  parallelism and timeouts, and whether to attempt WMI on ping-failed
+  machines (off by default; turn on to find hosts that block ICMP but
+  allow WMI). Saved to `%LOCALAPPDATA%\DHCPLeaseInspector\settings.json`.
 
 A summary line above the table live-counts every status (Total / Ready /
-Domain Issue / Offline / Error / No DNS). Rows are color-coded (green =
+Domain Issue / Patch Overdue / Offline / Error / No DNS). Rows are color-coded (green =
 Ready, yellow = Domain Issue, red = Offline/Error/No DNS), every column is
 click-to-sort, and a **Show** dropdown filters the table to one status.
 Hovering a failed row shows the underlying error (e.g. Access Denied vs

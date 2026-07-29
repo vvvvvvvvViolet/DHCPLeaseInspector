@@ -35,6 +35,30 @@ def format_last_logon(last_logon_iso: str | None) -> tuple[str, str]:
     return logon.strftime("%Y-%m-%d"), f"{days} day(s) ago (AD-replicated, may lag ~14 days)"
 
 
+def format_last_patch(last_patch_iso: str | None, recent_hotfixes: str | None) -> tuple[str, str]:
+    """Returns (cell text, tooltip). Tooltip lists the recent hotfix IDs."""
+    patch = _parse_dt(last_patch_iso)
+    if patch is None:
+        return "-", ""
+    days = (_now_like(patch) - patch).days
+    tip = f"{days} day(s) ago"
+    if recent_hotfixes:
+        tip += f"\nRecent: {recent_hotfixes}"
+    return patch.strftime("%Y-%m-%d"), tip
+
+
+def patch_overdue(check: dict) -> bool:
+    """True when the newest installed hotfix is older than the threshold.
+
+    Unknown patch date (WMI unavailable) is never flagged — we don't guess.
+    """
+    patch = _parse_dt(check.get("last_patch"))
+    if patch is None:
+        return False
+    age_days = (_now_like(patch) - patch).days
+    return age_days > config.get_settings().stale_patch_days
+
+
 def domain_health(check: dict) -> str:
     """Assess the machine's domain standing purely from AD facts.
 
@@ -83,6 +107,9 @@ def compute_status(check: dict) -> str:
     if not reachable:
         return "Error" if check.get("error") else "Offline"
 
+    # A domain problem is more fundamental than a patch lag, so it wins.
     if domain_health(check) in ("Disabled", "Stale", "Not Joined"):
         return "Domain Issue"
+    if patch_overdue(check):
+        return "Patch Overdue"
     return "Ready"

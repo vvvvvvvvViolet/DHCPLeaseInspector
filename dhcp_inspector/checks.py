@@ -62,6 +62,8 @@ $result = [ordered]@{
     DHCPServer = $null
     OSVersion = $null
     LastBoot = $null
+    LastPatch = $null
+    RecentHotfixes = $null
     FirstError = $null
 }
 
@@ -114,6 +116,23 @@ if ($session) {
                 -Filter "IPEnabled=True AND DHCPEnabled=True" -OperationTimeoutSec 15 -ErrorAction Stop | Select-Object -First 1
             $result.DHCPServer = $nic.DHCPServer
         } catch { Note-Error $_ }
+
+        try {
+            # Win32_QuickFixEngineering.InstalledOn is a loosely-typed string;
+            # -as [DateTime] returns $null (no throw) for the odd blank/garbage
+            # value, so filter to the parseable ones, then take the newest.
+            $qfe = Get-CimInstance -CimSession $session -ClassName Win32_QuickFixEngineering `
+                -OperationTimeoutSec 15 -ErrorAction Stop |
+                Where-Object { $_.InstalledOn -and ($_.InstalledOn -as [DateTime]) } |
+                Sort-Object { $_.InstalledOn -as [DateTime] } -Descending
+            if ($qfe) {
+                $latest = @($qfe)[0]
+                $result.LastPatch = ([DateTime]$latest.InstalledOn).ToString("o")
+                $result.RecentHotfixes = (@($qfe) | Select-Object -First 5 | ForEach-Object {
+                    "{0} ({1})" -f $_.HotFixID, (([DateTime]$_.InstalledOn).ToString("yyyy-MM-dd"))
+                }) -join "; "
+            }
+        } catch { Note-Error $_ }
     }
 
     Remove-CimSession $session -ErrorAction SilentlyContinue
@@ -132,6 +151,8 @@ def _failed_result(computer_name: str, error: str) -> dict:
         "dhcp_server": None,
         "os_version": None,
         "last_boot": None,
+        "last_patch": None,
+        "recent_hotfixes": None,
         "error": error,
     }
 
@@ -201,6 +222,8 @@ def check_computer(
         "dhcp_server": data.get("DHCPServer"),
         "os_version": data.get("OSVersion"),
         "last_boot": data.get("LastBoot"),
+        "last_patch": data.get("LastPatch"),
+        "recent_hotfixes": data.get("RecentHotfixes"),
         # Surface the WMI error only when nothing succeeded — a machine that
         # answered WMI but denied one sub-query is still a usable result.
         "error": None if wmi_ok else data.get("FirstError"),

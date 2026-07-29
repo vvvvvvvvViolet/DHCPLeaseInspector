@@ -31,15 +31,17 @@ from . import ad_utils, config, export_excel, history, scoring
 from .worker import ScanWorker
 
 HEADERS = ["Computer", "IP", "Ping", "Domain", "DHCP Server", "OS Version",
-           "Uptime", "Last Logon", "Status", "Change"]
-_STATUS_COL = 8
-_CHANGE_COL = 9
+           "Uptime", "Last Logon", "Last Patch", "Status", "Change"]
+_LAST_LOGON_COL = 7
+_LAST_PATCH_COL = 8
+_STATUS_COL = 9
+_CHANGE_COL = 10
 
 _COLOR_GOOD = QColor("#c8e6c9")   # green  — Ready
-_COLOR_WARN = QColor("#fff9c4")   # yellow — Domain Issue
+_COLOR_WARN = QColor("#fff9c4")   # yellow — Domain Issue / Patch Overdue
 _COLOR_BAD = QColor("#ffcdd2")    # red    — Offline / Error / No DNS
 
-_STATUSES = ["Ready", "Domain Issue", "Offline", "Error", "No DNS"]
+_STATUSES = ["Ready", "Domain Issue", "Patch Overdue", "Offline", "Error", "No DNS"]
 _FAILED_STATUSES = ("Offline", "Error", "No DNS")
 
 
@@ -55,6 +57,11 @@ class SettingsDialog(QDialog):
         self.stale_days.setRange(1, 3650)
         self.stale_days.setValue(settings.stale_password_days)
         form.addRow("Stale password threshold (days):", self.stale_days)
+
+        self.stale_patch_days = QSpinBox()
+        self.stale_patch_days.setRange(1, 3650)
+        self.stale_patch_days.setValue(settings.stale_patch_days)
+        form.addRow("Patch overdue threshold (days):", self.stale_patch_days)
 
         self.parallel_ping = QSpinBox()
         self.parallel_ping.setRange(1, 256)
@@ -93,6 +100,7 @@ class SettingsDialog(QDialog):
     def save(self):
         config.save_settings(config.Settings(
             stale_password_days=self.stale_days.value(),
+            stale_patch_days=self.stale_patch_days.value(),
             max_parallel_ping=self.parallel_ping.value(),
             max_parallel_wmi=self.parallel_wmi.value(),
             ping_timeout_ms=self.ping_timeout.value(),
@@ -299,8 +307,8 @@ class MainWindow(QMainWindow):
             logon_item = QTableWidgetItem(logon_text)
             if logon_tip:
                 logon_item.setToolTip(logon_tip)
-            self.table.setItem(row, 7, logon_item)
-            for col in (1, 2, 4, 6, 8, 9):
+            self.table.setItem(row, _LAST_LOGON_COL, logon_item)
+            for col in (1, 2, 4, 6, _LAST_PATCH_COL, _STATUS_COL, _CHANGE_COL):
                 self.table.setItem(row, col, QTableWidgetItem("-"))
         self.table.setSortingEnabled(True)
         self.progress.setValue(0)
@@ -367,7 +375,7 @@ class MainWindow(QMainWindow):
     def _status_color(status: str) -> QColor:
         if status == "Ready":
             return _COLOR_GOOD
-        if status == "Domain Issue":
+        if status in ("Domain Issue", "Patch Overdue"):
             return _COLOR_WARN
         return _COLOR_BAD  # Offline / Error / No DNS
 
@@ -381,11 +389,15 @@ class MainWindow(QMainWindow):
         error = result.get("error")
         color = self._status_color(status)
         logon_text, logon_tip = scoring.format_last_logon(result.get("ad_last_logon"))
+        patch_text, patch_tip = scoring.format_last_patch(
+            result.get("last_patch"), result.get("recent_hotfixes")
+        )
 
         ping_text = "OK" if result.get("ping") else "Fail"
         if result.get("dns_ok") is False:
             ping_text = "No DNS"
 
+        change_item = self.table.item(row, _CHANGE_COL)
         values = [
             result["computer_name"],
             result.get("ip") or "-",
@@ -395,8 +407,9 @@ class MainWindow(QMainWindow):
             result.get("os_version") or result.get("ad_os") or "-",
             uptime,
             logon_text,
+            patch_text,
             status,
-            self.table.item(row, _CHANGE_COL).text() if self.table.item(row, _CHANGE_COL) else "-",
+            change_item.text() if change_item else "-",
         ]
         for col, value in enumerate(values):
             item = QTableWidgetItem(value)
@@ -405,8 +418,10 @@ class MainWindow(QMainWindow):
             # tooltip so it isn't lost behind a bare "-" or "Offline".
             if error:
                 item.setToolTip(error)
-            if col == 7 and logon_tip:
+            if col == _LAST_LOGON_COL and logon_tip:
                 item.setToolTip(logon_tip)
+            if col == _LAST_PATCH_COL and patch_tip:
+                item.setToolTip(patch_tip)
             self.table.setItem(row, col, item)
 
         self._update_summary()

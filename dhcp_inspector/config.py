@@ -8,6 +8,7 @@ from pathlib import Path
 @dataclass
 class Settings:
     stale_password_days: int = 45   # computer-account password age -> "(Stale)"
+    stale_patch_days: int = 60      # last hotfix older than this -> "Patch Overdue"
     max_parallel_ping: int = 60     # phase-1 DNS/ping sweep concurrency
     max_parallel_wmi: int = 15      # phase-2 WMI concurrency
     ping_timeout_ms: int = 2000

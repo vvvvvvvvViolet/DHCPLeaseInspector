@@ -3,6 +3,7 @@
 _STATUS_FILLS = {
     "Ready": "C8E6C9",          # green
     "Domain Issue": "FFF9C4",   # yellow
+    "Patch Overdue": "FFF9C4",
     "Offline": "FFCDD2",        # red
     "Error": "FFCDD2",
     "No DNS": "FFCDD2",
