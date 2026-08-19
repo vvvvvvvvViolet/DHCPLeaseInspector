@@ -11,6 +11,14 @@ Single-page UI with three buttons:
   immediately — even before a live scan and even for machines that can't
   be reached over the network. An optional name filter narrows the query
   (substring match) before it hits a big domain.
+- **Load Subnet** — scans an IP range instead of the AD list: accepts CIDRs
+  (`10.20.30.0/24`), ranges (`10.20.30.10-50` or the full form), and single
+  addresses, comma- or space-separated. Live addresses are named by reverse
+  DNS, and if AD was loaded first each host is matched back to its computer
+  account — anything answering without one is flagged **Not in AD**, which
+  is how unmanaged or rogue devices surface. A **Live hosts only** checkbox
+  hides the addresses that never answered (a /24 is mostly empty), and the
+  range size is capped (default 4096) so a stray `/8` can't be expanded.
 - **Check Status** — scans all loaded computers on a background `QThread`
   in **two phases**: first a fast DNS + ping sweep (60 machines in
   parallel; a dead machine costs ~2 s), then WMI checks only for the
@@ -36,8 +44,8 @@ Single-page UI with three buttons:
     (`Win32_QuickFixEngineering`); the tooltip lists the most recent KB
     IDs. A machine whose newest patch is older than the overdue threshold
     is flagged `Patch Overdue`.
-  - **Status** — `Ready` / `Domain Issue` / `Patch Overdue` / `Offline` /
-    `Error` / `No DNS`
+  - **Status** — `Ready` / `Domain Issue` / `Patch Overdue` / `Not in AD` /
+    `Offline` / `Error` / `No DNS`
   - **Change** — what changed vs the previous scan, e.g. `Ready → Offline`
     or `New`. Each completed scan is saved (last 30 runs kept) in the
     per-user app-data folder, and the next scan compares against it.
@@ -53,13 +61,14 @@ Single-page UI with three buttons:
   written to settings, history, or the command line; they're passed to
   PowerShell through an environment variable and turned into a
   `PSCredential` for `New-CimSession`.
-- **Settings** — stale-password and patch-overdue thresholds, ping/WMI
-  parallelism and timeouts, and whether to attempt WMI on ping-failed
+- **Settings** — stale-password and patch-overdue thresholds, the maximum
+  subnet size, ping/WMI parallelism and timeouts, and whether to attempt
+  WMI on ping-failed
   machines (off by default; turn on to find hosts that block ICMP but
   allow WMI). Saved to `%LOCALAPPDATA%\DHCPLeaseInspector\settings.json`.
 
 A summary line above the table live-counts every status (Total / Ready /
-Domain Issue / Patch Overdue / Offline / Error / No DNS). Rows are color-coded (green =
+Domain Issue / Patch Overdue / Not in AD / Offline / Error / No DNS). Rows are color-coded (green =
 Ready, yellow = Domain Issue, red = Offline/Error/No DNS), every column is
 click-to-sort, and a **Show** dropdown filters the table to one status.
 Hovering a failed row shows the underlying error (e.g. Access Denied vs
@@ -116,7 +125,8 @@ the Actions tab ("Run workflow"). Download the built `.exe` from the run's
 main.py                        # entry point
 dhcp_inspector/
   ad_utils.py         # Get-ADComputer: names + domain/OS/enabled/pwd age/last logon
-  checks.py           # DNS+ping probe, and the WMI check over DCOM
+  subnet.py            # expands CIDRs/ranges into the addresses to probe
+  checks.py           # DNS/PTR+ping probe, and the WMI check over DCOM
   scoring.py           # uptime/last-logon formatting + AD domain health + status
   config.py            # user settings (thresholds, parallelism, timeouts)
   history.py           # saves each run so the next one can show what changed

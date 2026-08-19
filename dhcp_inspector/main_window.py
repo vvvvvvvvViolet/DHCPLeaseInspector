@@ -1,4 +1,5 @@
 """Single-page PyQt5 GUI: Load AD / Check Status / Export Excel."""
+import ipaddress
 import sys
 from collections import Counter
 
@@ -27,7 +28,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from . import ad_utils, config, export_excel, history, scoring
+from . import ad_utils, config, export_excel, history, scoring, subnet
 from .worker import ScanWorker
 
 HEADERS = ["Computer", "IP", "Ping", "Domain", "DHCP Server", "OS Version",
@@ -38,11 +39,31 @@ _STATUS_COL = 9
 _CHANGE_COL = 10
 
 _COLOR_GOOD = QColor("#c8e6c9")   # green  — Ready
-_COLOR_WARN = QColor("#fff9c4")   # yellow — Domain Issue / Patch Overdue
+_COLOR_WARN = QColor("#fff9c4")   # yellow — Domain Issue / Patch Overdue / Not in AD
 _COLOR_BAD = QColor("#ffcdd2")    # red    — Offline / Error / No DNS
 
-_STATUSES = ["Ready", "Domain Issue", "Patch Overdue", "Offline", "Error", "No DNS"]
+_STATUSES = ["Ready", "Domain Issue", "Patch Overdue", "Not in AD",
+             "Offline", "Error", "No DNS"]
 _FAILED_STATUSES = ("Offline", "Error", "No DNS")
+_WARN_STATUSES = ("Domain Issue", "Patch Overdue", "Not in AD")
+
+
+def _ip_sort_key(text: str):
+    try:
+        address = ipaddress.ip_address(text.strip())
+    except ValueError:
+        return None
+    return (address.version, int(address))
+
+
+class _IPItem(QTableWidgetItem):
+    """Orders IP addresses numerically; falls back to text for hostnames."""
+
+    def __lt__(self, other):
+        mine, theirs = _ip_sort_key(self.text()), _ip_sort_key(other.text())
+        if mine is not None and theirs is not None:
+            return mine < theirs
+        return super().__lt__(other)
 
 
 class SettingsDialog(QDialog):
@@ -79,6 +100,13 @@ class SettingsDialog(QDialog):
         self.ping_timeout.setValue(settings.ping_timeout_ms)
         form.addRow("Ping timeout (ms):", self.ping_timeout)
 
+        self.max_subnet_hosts = QSpinBox()
+        self.max_subnet_hosts.setRange(1, 65536)
+        self.max_subnet_hosts.setSingleStep(256)
+        self.max_subnet_hosts.setValue(settings.max_subnet_hosts)
+        self.max_subnet_hosts.setToolTip("Largest IP range 'Load Subnet' will expand.")
+        form.addRow("Max subnet hosts:", self.max_subnet_hosts)
+
         self.wmi_timeout = QSpinBox()
         self.wmi_timeout.setRange(5, 600)
         self.wmi_timeout.setValue(settings.wmi_timeout_s)
@@ -104,6 +132,7 @@ class SettingsDialog(QDialog):
             max_parallel_ping=self.parallel_ping.value(),
             max_parallel_wmi=self.parallel_wmi.value(),
             ping_timeout_ms=self.ping_timeout.value(),
+            max_subnet_hosts=self.max_subnet_hosts.value(),
             wmi_timeout_s=self.wmi_timeout.value(),
             wmi_only_ping_ok=self.wmi_only_ping_ok.isChecked(),
         ))
@@ -188,6 +217,25 @@ class MainWindow(QMainWindow):
         ad_row.addWidget(self.settings_btn)
         layout.addLayout(ad_row)
 
+        # Row 1b: scan an IP range instead of (or alongside) the AD list
+        subnet_row = QHBoxLayout()
+        subnet_row.addWidget(QLabel("Subnet:"))
+        self.subnet_edit = QLineEdit()
+        self.subnet_edit.setPlaceholderText(
+            "e.g. 10.20.30.0/24  or  10.20.30.1-50  (comma-separated for several)"
+        )
+        subnet_row.addWidget(self.subnet_edit, 1)
+        self.load_subnet_btn = QPushButton("Load Subnet")
+        self.load_subnet_btn.setToolTip(
+            "Scan an IP range directly. Load AD first to cross-reference the "
+            "discovered hosts and flag any that have no AD computer account."
+        )
+        subnet_row.addWidget(self.load_subnet_btn)
+        self.live_only = QCheckBox("Live hosts only")
+        self.live_only.setToolTip("Hide addresses that didn't answer (Offline / Error / No DNS).")
+        subnet_row.addWidget(self.live_only)
+        layout.addLayout(subnet_row)
+
         # Row 2: scan controls + status filter + export
         scan_row = QHBoxLayout()
         self.check_status_btn = QPushButton("Check Status")
@@ -233,6 +281,10 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         self.load_ad_btn.clicked.connect(self.on_load_ad)
+        self.load_subnet_btn.clicked.connect(self.on_load_subnet)
+        self.live_only.toggled.connect(
+            lambda: self.apply_status_filter(self.status_filter.currentText())
+        )
         self.credentials_btn.clicked.connect(self.on_credentials)
         self.settings_btn.clicked.connect(self.on_settings)
         self.check_status_btn.clicked.connect(self.on_check_status)
@@ -318,6 +370,39 @@ class MainWindow(QMainWindow):
         if self.table.rowCount() == 0:
             QMessageBox.information(self, "Load AD", "No computers matched.")
 
+    def on_load_subnet(self):
+        """Populate the table from an IP range instead of the AD list."""
+        try:
+            ips = subnet.parse_targets(self.subnet_edit.text())
+        except ValueError as exc:
+            QMessageBox.warning(self, "Subnet", str(exc))
+            return
+
+        # Any AD data already loaded is deliberately kept: it lets the scan
+        # match discovered hosts back to their computer account.
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(0)
+        self._status_counts = Counter()
+        for ip in ips:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            # Named once the reverse lookup lands during the scan.
+            self.table.setItem(row, 0, _IPItem(ip))
+            self.table.setItem(row, 1, _IPItem(ip))
+            for col in range(2, len(HEADERS)):
+                self.table.setItem(row, col, QTableWidgetItem("-"))
+        self.table.setSortingEnabled(True)
+        self.progress.setValue(0)
+        self.progress.setMaximum(max(len(ips), 1))
+        self.phase_label.setText("")
+        self._update_summary()
+
+        if not self._ad_info:
+            self.summary_label.setText(
+                self.summary_label.text()
+                + "   —   Load AD first to flag hosts with no AD account."
+            )
+
     def _start_scan(self, targets: list[tuple[int, str]]):
         # Row indexes coming back from the worker map to table rows, so the
         # order must not shift mid-scan.
@@ -328,6 +413,7 @@ class MainWindow(QMainWindow):
         self.check_status_btn.setEnabled(False)
         self.recheck_btn.setEnabled(False)
         self.load_ad_btn.setEnabled(False)
+        self.load_subnet_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         self.progress.setValue(0)
         self.progress.setMaximum(len(targets))
@@ -375,7 +461,7 @@ class MainWindow(QMainWindow):
     def _status_color(status: str) -> QColor:
         if status == "Ready":
             return _COLOR_GOOD
-        if status in ("Domain Issue", "Patch Overdue"):
+        if status in _WARN_STATUSES:
             return _COLOR_WARN
         return _COLOR_BAD  # Offline / Error / No DNS
 
@@ -399,7 +485,9 @@ class MainWindow(QMainWindow):
 
         change_item = self.table.item(row, _CHANGE_COL)
         values = [
-            result["computer_name"],
+            # On a subnet scan the target is an IP; show its reverse-DNS name
+            # once we have one.
+            result.get("resolved_name") or result["computer_name"],
             result.get("ip") or "-",
             ping_text,
             scoring.domain_label(result),
@@ -412,7 +500,7 @@ class MainWindow(QMainWindow):
             change_item.text() if change_item else "-",
         ]
         for col, value in enumerate(values):
-            item = QTableWidgetItem(value)
+            item = _IPItem(value) if col in (0, 1) else QTableWidgetItem(value)
             item.setBackground(color)
             # Full failure reason (e.g. Access Denied vs timeout) lives in the
             # tooltip so it isn't lost behind a bare "-" or "Offline".
@@ -465,6 +553,7 @@ class MainWindow(QMainWindow):
         self.check_status_btn.setEnabled(True)
         self.recheck_btn.setEnabled(True)
         self.load_ad_btn.setEnabled(True)
+        self.load_subnet_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.phase_label.setText("Done")
         self.table.setSortingEnabled(True)
@@ -472,10 +561,16 @@ class MainWindow(QMainWindow):
         self._update_summary()
 
     def apply_status_filter(self, wanted: str):
+        live_only = self.live_only.isChecked()
         for row in range(self.table.rowCount()):
             item = self.table.item(row, _STATUS_COL)
             status = item.text() if item else ""
-            self.table.setRowHidden(row, wanted != "All" and status != wanted)
+            hidden = wanted != "All" and status != wanted
+            # "Live hosts only" composes with the dropdown rather than
+            # overriding it — a dead subnet address is noise either way.
+            if live_only and status in _FAILED_STATUSES:
+                hidden = True
+            self.table.setRowHidden(row, hidden)
 
     def on_export_excel(self):
         if self.table.rowCount() == 0:

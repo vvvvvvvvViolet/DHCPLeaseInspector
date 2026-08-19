@@ -1,4 +1,5 @@
 """Per-computer probes: fast DNS/ping sweep, then a WMI check over DCOM."""
+import ipaddress
 import json
 import os
 import socket
@@ -15,20 +16,15 @@ _CRED_USER_ENV = "DHCPINSPECT_USER"
 _CRED_PASS_ENV = "DHCPINSPECT_PASS"
 
 
-def resolve_and_ping(computer_name: str, ping_timeout_ms: int | None = None) -> dict:
-    """Phase-1 probe: resolve the name in DNS, then send one ping.
-
-    Distinguishes "no DNS record" (machine likely decommissioned) from
-    "resolves but doesn't answer" (off / firewalled). Never raises.
-    """
-    if ping_timeout_ms is None:
-        ping_timeout_ms = config.get_settings().ping_timeout_ms
-
+def _is_ip_literal(target: str) -> bool:
     try:
-        ip = socket.gethostbyname(computer_name)
-    except OSError:
-        return {"ip": None, "dns_ok": False, "ping": False, "error": "DNS lookup failed"}
+        ipaddress.ip_address(target)
+    except ValueError:
+        return False
+    return True
 
+
+def _ping(ip: str, ping_timeout_ms: int) -> bool:
     if sys.platform == "win32":
         args = ["ping", "-n", "1", "-w", str(ping_timeout_ms), ip]
     else:
@@ -37,14 +33,53 @@ def resolve_and_ping(computer_name: str, ping_timeout_ms: int | None = None) -> 
     try:
         result = run_hidden(args, timeout=ping_timeout_ms / 1000 + 5)
     except (subprocess.TimeoutExpired, OSError):
-        return {"ip": ip, "dns_ok": True, "ping": False, "error": None}
+        return False
 
     # On Windows, "Destination host unreachable" still exits 0 — a real reply
     # always carries a TTL.
     ok = result.returncode == 0
     if ok and sys.platform == "win32":
         ok = "TTL=" in (result.stdout or "").upper()
-    return {"ip": ip, "dns_ok": True, "ping": ok, "error": None}
+    return ok
+
+
+def resolve_and_ping(target: str, ping_timeout_ms: int | None = None) -> dict:
+    """Phase-1 probe: work out the address, then send one ping.
+
+    `target` is either a computer name (forward-resolved via DNS) or a bare
+    IP address from a subnet scan, in which case the name is looked up in
+    reverse instead and returned as "resolved_name". For names this
+    distinguishes "no DNS record" (machine likely decommissioned) from
+    "resolves but doesn't answer" (off / firewalled). Never raises.
+    """
+    if ping_timeout_ms is None:
+        ping_timeout_ms = config.get_settings().ping_timeout_ms
+
+    if _is_ip_literal(target):
+        ip = target
+        ok = _ping(ip, ping_timeout_ms)
+        # Only pay for a PTR lookup on addresses that actually answered —
+        # a dead /24 would otherwise cost hundreds of pointless queries.
+        resolved_name = None
+        if ok:
+            try:
+                resolved_name = socket.gethostbyaddr(ip)[0]
+            except OSError:
+                resolved_name = None
+        return {
+            "ip": ip,
+            "dns_ok": True,   # nothing to resolve; the address was given
+            "ping": ok,
+            "resolved_name": resolved_name,
+            "error": None,
+        }
+
+    try:
+        ip = socket.gethostbyname(target)
+    except OSError:
+        return {"ip": None, "dns_ok": False, "ping": False, "error": "DNS lookup failed"}
+
+    return {"ip": ip, "dns_ok": True, "ping": _ping(ip, ping_timeout_ms), "error": None}
 
 
 # The computer name is prepended as a $ComputerName assignment (see

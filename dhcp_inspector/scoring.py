@@ -107,6 +107,11 @@ def compute_status(check: dict) -> str:
     if not reachable:
         return "Error" if check.get("error") else "Offline"
 
+    # A live host with no matching AD computer account — an unmanaged or
+    # rogue device. Only reported when AD data was loaded to compare against.
+    if check.get("in_ad") is False:
+        return "Not in AD"
+
     # A domain problem is more fundamental than a patch lag, so it wins.
     if domain_health(check) in ("Disabled", "Stale", "Not Joined"):
         return "Domain Issue"

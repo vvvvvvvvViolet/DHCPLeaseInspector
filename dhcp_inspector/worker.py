@@ -24,6 +24,9 @@ class ScanWorker(QThread):
         # last_logon}); merged into each result so the domain check has AD
         # facts even when the machine can't be reached over WMI.
         self._ad_info = ad_info or {}
+        # Subnet scans identify hosts by PTR name, whose case and FQDN form
+        # rarely match the AD record's Name, so index it for lookup.
+        self._ad_by_lower = {name.lower(): rec for name, rec in self._ad_info.items()}
         # (username, password) for the remote WMI connection, or None to use
         # the launching user's own identity.
         self._credential = credential
@@ -32,13 +35,29 @@ class ScanWorker(QThread):
     def stop(self):
         self._stop_requested = True
 
+    def _find_ad(self, computer: str, result: dict) -> dict | None:
+        record = self._ad_info.get(computer)
+        if record is not None:
+            return record
+        # Subnet scan: the target is an IP, so match on the reverse-DNS name,
+        # trying the FQDN's leading label as well.
+        name = result.get("resolved_name")
+        if not name:
+            return None
+        return (self._ad_by_lower.get(name.lower())
+                or self._ad_by_lower.get(name.split(".")[0].lower()))
+
     def _with_ad(self, computer: str, result: dict) -> dict:
-        ad = self._ad_info.get(computer, {})
+        record = self._find_ad(computer, result)
+        ad = record or {}
         result["ad_domain"] = ad.get("domain")
         result["ad_os"] = ad.get("ad_os")
         result["ad_enabled"] = ad.get("enabled")
         result["ad_password_last_set"] = ad.get("password_last_set")
         result["ad_last_logon"] = ad.get("last_logon")
+        # None when there's no AD data loaded to compare against, so an
+        # unknown host is never mistaken for one missing from AD.
+        result["in_ad"] = (record is not None) if self._ad_info else None
         return result
 
     def _probe_one(self, computer: str) -> dict:
@@ -87,7 +106,12 @@ class ScanWorker(QThread):
             done = 0
             with ThreadPoolExecutor(max_workers=settings.max_parallel_wmi) as pool:
                 futures2 = {
-                    pool.submit(self._wmi_one, probe["computer_name"]): (row, probe)
+                    # Prefer the reverse-DNS name on a subnet scan: WMI
+                    # authenticates far more reliably by name than by IP.
+                    pool.submit(
+                        self._wmi_one,
+                        probe.get("resolved_name") or probe["computer_name"],
+                    ): (row, probe)
                     for row, probe in survivors
                 }
                 for future in as_completed(futures2):
