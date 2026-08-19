@@ -3,12 +3,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
-from . import checks, config
+from . import checks, config, dhcp_leases
 
 
 class ScanWorker(QThread):
     row_ready = pyqtSignal(int, dict)
     progress = pyqtSignal(int, int, str)  # done, total, phase label
+    warning = pyqtSignal(str)             # non-fatal problem worth surfacing
     finished_all = pyqtSignal()
 
     def __init__(
@@ -16,6 +17,8 @@ class ScanWorker(QThread):
         targets: list[tuple[int, str]],
         ad_info: dict | None = None,
         credential: tuple[str, str] | None = None,
+        leases: dict | None = None,
+        dhcp_server: str = "",
     ):
         """targets: (table row, computer name) pairs — any subset of the table."""
         super().__init__()
@@ -30,6 +33,12 @@ class ScanWorker(QThread):
         # (username, password) for the remote WMI connection, or None to use
         # the launching user's own identity.
         self._credential = credential
+        # {ip: {"name", "mac"}} from the DHCP server — names a host that
+        # answers nothing itself, since the server recorded the handout.
+        self._leases = leases or {}
+        # Fetched on the worker thread when set, so the (potentially slow)
+        # lease query never blocks the GUI.
+        self._dhcp_server = dhcp_server
         self._stop_requested = False
 
     def stop(self):
@@ -42,7 +51,8 @@ class ScanWorker(QThread):
         # Subnet scan: the target is an IP, so match on whatever name we
         # discovered — WMI's answer first, since the host reports it itself —
         # trying each FQDN's leading label as well.
-        for name in (result.get("wmi_name"), result.get("resolved_name")):
+        for name in (result.get("wmi_name"), result.get("resolved_name"),
+                     result.get("lease_name")):
             if not name:
                 continue
             record = (self._ad_by_lower.get(name.lower())
@@ -52,6 +62,9 @@ class ScanWorker(QThread):
         return None
 
     def _with_ad(self, computer: str, result: dict) -> dict:
+        lease = self._leases.get(result.get("ip") or computer) or {}
+        result["lease_name"] = lease.get("name")
+        result["lease_mac"] = lease.get("mac")
         record = self._find_ad(computer, result)
         ad = record or {}
         result["ad_domain"] = ad.get("domain")
@@ -82,6 +95,15 @@ class ScanWorker(QThread):
     def run(self):
         settings = config.get_settings()
         try:
+            # Phase 0: one lease-table query names every host the scan can't
+            # identify on its own. A failure here only costs us names.
+            if self._dhcp_server and not self._leases:
+                self.progress.emit(0, len(self._targets), "Reading DHCP leases")
+                try:
+                    self._leases = dhcp_leases.load_leases(self._dhcp_server)
+                except Exception as exc:
+                    self.warning.emit(f"DHCP leases unavailable: {exc}")
+
             # Phase 1: DNS + ping every target with high parallelism. Cheap,
             # so dead machines cost ~2s here instead of a long WMI timeout.
             survivors: list[tuple[int, dict]] = []

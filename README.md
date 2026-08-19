@@ -15,9 +15,12 @@ Single-page UI with three buttons:
   (`10.20.30.0/24`), ranges (`10.20.30.10-50` or the full form), and single
   addresses, comma- or space-separated. Live addresses are named from
   whichever source answers first — the name the host reports over WMI, else
-  reverse DNS, else NetBIOS (`nbtstat`) — so hosts still get named on
-  networks that register no PTR records. If AD was loaded first each host is
-  matched back to its computer account — anything answering without one is flagged **Not in AD**, which
+  reverse DNS, else NetBIOS (`nbtstat`), else the DHCP server's lease table
+  — so hosts still get named on networks with no PTR records, with NetBIOS
+  disabled, and where WMI is refused. Set the **DHCP server** in Settings to
+  enable the lease lookup; it is a single query for the whole scan and the
+  device's MAC address shows in the Computer column's tooltip. If AD was
+  loaded first each host is matched back to its computer account — anything answering without one is flagged **Not in AD**, which
   is how unmanaged or rogue devices surface. A **Live hosts only** checkbox
   hides the addresses that never answered (a /24 is mostly empty), and the
   range size is capped (default 4096) so a stray `/8` can't be expanded.
@@ -63,9 +66,9 @@ Single-page UI with three buttons:
   written to settings, history, or the command line; they're passed to
   PowerShell through an environment variable and turned into a
   `PSCredential` for `New-CimSession`.
-- **Settings** — stale-password and patch-overdue thresholds, the maximum
-  subnet size, ping/WMI parallelism and timeouts, and whether to attempt
-  WMI on ping-failed
+- **Settings** — stale-password and patch-overdue thresholds, the DHCP
+  server to read lease names from, the maximum subnet size, ping/WMI
+  parallelism and timeouts, and whether to attempt WMI on ping-failed
   machines (off by default; turn on to find hosts that block ICMP but
   allow WMI). Saved to `%LOCALAPPDATA%\DHCPLeaseInspector\settings.json`.
 
@@ -128,12 +131,13 @@ main.py                        # entry point
 dhcp_inspector/
   ad_utils.py         # Get-ADComputer: names + domain/OS/enabled/pwd age/last logon
   subnet.py            # expands CIDRs/ranges into the addresses to probe
+  dhcp_leases.py       # reads the DHCP server's lease table (ip -> name/MAC)
   checks.py           # DNS/PTR+ping probe, and the WMI check over DCOM
   scoring.py           # uptime/last-logon formatting + AD domain health + status
   config.py            # user settings (thresholds, parallelism, timeouts)
   history.py           # saves each run so the next one can show what changed
   export_excel.py      # writes the results table to .xlsx
-  process_utils.py     # subprocess helper that hides the console window
+  process_utils.py     # hidden subprocess + UTF-8 PowerShell helpers
   worker.py             # QThread: ping sweep phase, then WMI phase, + AD merge
   main_window.py        # PyQt5 single-page window (Load AD / Check Status / Export Excel)
 ```

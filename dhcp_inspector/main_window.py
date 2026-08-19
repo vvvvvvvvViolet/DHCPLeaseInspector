@@ -100,6 +100,14 @@ class SettingsDialog(QDialog):
         self.ping_timeout.setValue(settings.ping_timeout_ms)
         form.addRow("Ping timeout (ms):", self.ping_timeout)
 
+        self.dhcp_server = QLineEdit(settings.dhcp_server)
+        self.dhcp_server.setPlaceholderText("optional, e.g. dhcp01.corp.local")
+        self.dhcp_server.setToolTip(
+            "Read the lease table from this Windows DHCP server to name hosts "
+            "that can't be reached. Blank uses the DHCP service on this machine."
+        )
+        form.addRow("DHCP server:", self.dhcp_server)
+
         self.max_subnet_hosts = QSpinBox()
         self.max_subnet_hosts.setRange(1, 65536)
         self.max_subnet_hosts.setSingleStep(256)
@@ -133,6 +141,7 @@ class SettingsDialog(QDialog):
             max_parallel_wmi=self.parallel_wmi.value(),
             ping_timeout_ms=self.ping_timeout.value(),
             max_subnet_hosts=self.max_subnet_hosts.value(),
+            dhcp_server=self.dhcp_server.text().strip(),
             wmi_timeout_s=self.wmi_timeout.value(),
             wmi_only_ping_ok=self.wmi_only_ping_ok.isChecked(),
         ))
@@ -199,6 +208,7 @@ class MainWindow(QMainWindow):
         self._status_counts = Counter()  # live counts for the summary line
         self._prev_run = None         # snapshot loaded when a scan starts
         self._credential = None       # (username, password) in memory only
+        self._warning = ""            # degraded-result note for the summary
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -306,7 +316,10 @@ class MainWindow(QMainWindow):
         unscanned = total - sum(self._status_counts.values())
         if unscanned:
             parts.append(f"Unscanned {unscanned}")
-        self.summary_label.setText("  |  ".join(parts))
+        text = "  |  ".join(parts)
+        if self._warning:
+            text += f"   —   {self._warning}"
+        self.summary_label.setText(text)
 
     # ----- actions -----
 
@@ -409,6 +422,7 @@ class MainWindow(QMainWindow):
         self.table.setSortingEnabled(False)
         self.status_filter.setCurrentIndex(0)
         self._prev_run = history.last_run()
+        self._warning = ""
 
         self.check_status_btn.setEnabled(False)
         self.recheck_btn.setEnabled(False)
@@ -419,9 +433,13 @@ class MainWindow(QMainWindow):
         self.progress.setMaximum(len(targets))
         self.phase_label.setText("Ping sweep")
 
-        self._worker = ScanWorker(targets, self._ad_info, self._credential)
+        self._worker = ScanWorker(
+            targets, self._ad_info, self._credential,
+            dhcp_server=config.get_settings().dhcp_server,
+        )
         self._worker.row_ready.connect(self.on_row_ready)
         self._worker.progress.connect(self.on_progress)
+        self._worker.warning.connect(self.on_warning)
         self._worker.finished_all.connect(self.on_scan_finished)
         self._worker.start()
 
@@ -451,6 +469,12 @@ class MainWindow(QMainWindow):
         if self._worker is not None and self._worker.isRunning():
             self._worker.stop()
             self.cancel_btn.setEnabled(False)
+
+    def on_warning(self, message: str):
+        # Shown inline rather than as a dialog: it's a degraded result, not a
+        # failure, and a modal box mid-scan would be in the way.
+        self._warning = message
+        self._update_summary()
 
     def on_progress(self, done: int, total: int, phase: str):
         self.progress.setMaximum(max(total, 1))
@@ -487,8 +511,9 @@ class MainWindow(QMainWindow):
         values = [
             # On a subnet scan the target is an IP, so show the best name we
             # found: what the host reported over WMI, else reverse DNS or
-            # NetBIOS, else the address itself.
-            result.get("wmi_name") or result.get("resolved_name") or result["computer_name"],
+            # NetBIOS, else the DHCP lease record, else the address itself.
+            (result.get("wmi_name") or result.get("resolved_name")
+             or result.get("lease_name") or result["computer_name"]),
             result.get("ip") or "-",
             ping_text,
             scoring.domain_label(result),
@@ -511,6 +536,9 @@ class MainWindow(QMainWindow):
                 item.setToolTip(logon_tip)
             if col == _LAST_PATCH_COL and patch_tip:
                 item.setToolTip(patch_tip)
+            # The MAC is often the only handle on a device nothing could name.
+            if col == 0 and result.get("lease_mac"):
+                item.setToolTip(f"MAC {result['lease_mac']} (from DHCP lease)")
             self.table.setItem(row, col, item)
 
         self._update_summary()

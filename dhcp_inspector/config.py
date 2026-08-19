@@ -13,6 +13,7 @@ class Settings:
     max_parallel_wmi: int = 15      # phase-2 WMI concurrency
     ping_timeout_ms: int = 2000
     max_subnet_hosts: int = 4096    # guard against expanding, say, a /8
+    dhcp_server: str = ""           # DHCP server to read lease names from
     wmi_timeout_s: int = 60         # whole-PowerShell budget per machine
     wmi_only_ping_ok: bool = True   # skip WMI for machines that failed ping
 

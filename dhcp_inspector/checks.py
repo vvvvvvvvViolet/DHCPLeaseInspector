@@ -8,7 +8,7 @@ import subprocess
 import sys
 
 from . import config
-from .process_utils import run_hidden
+from .process_utils import run_hidden, run_powershell
 
 # Alternate credentials are handed to PowerShell through these env vars, not
 # the command line (which would show up in the process list) and never a
@@ -222,13 +222,12 @@ def _failed_result(computer_name: str, error: str) -> dict:
     }
 
 
-def _build_command(computer_name: str) -> list[str]:
+def _build_script(computer_name: str) -> str:
     # Embed the name as a single-quoted PowerShell literal (doubling any
     # embedded quote) instead of relying on param binding, which doesn't work
     # through `powershell -Command`.
     escaped = computer_name.replace("'", "''")
-    script = f"$ComputerName = '{escaped}'\n" + _CHECK_SCRIPT
-    return ["powershell", "-NoProfile", "-NonInteractive", "-Command", script]
+    return f"$ComputerName = '{escaped}'\n" + _CHECK_SCRIPT
 
 
 def _credential_env(credential: tuple[str, str] | None) -> dict | None:
@@ -260,8 +259,8 @@ def check_computer(
     if timeout is None:
         timeout = float(config.get_settings().wmi_timeout_s)
     try:
-        result = run_hidden(
-            _build_command(computer_name),
+        result = run_powershell(
+            _build_script(computer_name),
             timeout=timeout,
             env=_credential_env(credential),
         )

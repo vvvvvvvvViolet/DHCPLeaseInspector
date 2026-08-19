@@ -1,7 +1,7 @@
 """Loads the computer list (and per-computer AD facts) from Active Directory."""
 import json
 
-from .process_utils import run_hidden
+from .process_utils import run_powershell
 
 
 def _build_script(name_filter: str) -> str:
@@ -52,11 +52,7 @@ def load_ad_computers(name_filter: str = "") -> list[dict]:
     full query runs. Requires the RSAT ActiveDirectory PowerShell module and
     rights to query the domain.
     """
-    result = run_hidden(
-        ["powershell", "-NoProfile", "-NonInteractive", "-Command",
-         _build_script(name_filter.strip())],
-        timeout=120,
-    )
+    result = run_powershell(_build_script(name_filter.strip()), timeout=120)
     if result.returncode != 0:
         raise RuntimeError(
             result.stderr.strip()
