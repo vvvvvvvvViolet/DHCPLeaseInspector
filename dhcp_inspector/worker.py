@@ -39,13 +39,17 @@ class ScanWorker(QThread):
         record = self._ad_info.get(computer)
         if record is not None:
             return record
-        # Subnet scan: the target is an IP, so match on the reverse-DNS name,
-        # trying the FQDN's leading label as well.
-        name = result.get("resolved_name")
-        if not name:
-            return None
-        return (self._ad_by_lower.get(name.lower())
-                or self._ad_by_lower.get(name.split(".")[0].lower()))
+        # Subnet scan: the target is an IP, so match on whatever name we
+        # discovered — WMI's answer first, since the host reports it itself —
+        # trying each FQDN's leading label as well.
+        for name in (result.get("wmi_name"), result.get("resolved_name")):
+            if not name:
+                continue
+            record = (self._ad_by_lower.get(name.lower())
+                      or self._ad_by_lower.get(name.split(".")[0].lower()))
+            if record is not None:
+                return record
+        return None
 
     def _with_ad(self, computer: str, result: dict) -> dict:
         record = self._find_ad(computer, result)
@@ -120,8 +124,12 @@ class ScanWorker(QThread):
                             pending.cancel()
                         return
                     row, probe = futures2[future]
-                    # WMI fields overlay the phase-1 probe (ip/dns/ping kept).
+                    # WMI fields overlay the phase-1 probe (ip/dns/ping kept),
+                    # then the AD match is redone: WMI may have just told us a
+                    # name that phase 1 had no way to discover.
                     merged = {**probe, **future.result()}
+                    merged["computer_name"] = probe["computer_name"]
+                    merged = self._with_ad(probe["computer_name"], merged)
                     self.row_ready.emit(row, merged)
                     done += 1
                     self.progress.emit(done, len(survivors), "WMI check")

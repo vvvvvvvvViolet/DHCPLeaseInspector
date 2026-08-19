@@ -485,9 +485,10 @@ class MainWindow(QMainWindow):
 
         change_item = self.table.item(row, _CHANGE_COL)
         values = [
-            # On a subnet scan the target is an IP; show its reverse-DNS name
-            # once we have one.
-            result.get("resolved_name") or result["computer_name"],
+            # On a subnet scan the target is an IP, so show the best name we
+            # found: what the host reported over WMI, else reverse DNS or
+            # NetBIOS, else the address itself.
+            result.get("wmi_name") or result.get("resolved_name") or result["computer_name"],
             result.get("ip") or "-",
             ping_text,
             scoring.domain_label(result),

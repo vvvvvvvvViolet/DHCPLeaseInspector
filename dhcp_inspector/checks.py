@@ -2,6 +2,7 @@
 import ipaddress
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -43,6 +44,28 @@ def _ping(ip: str, ping_timeout_ms: int) -> bool:
     return ok
 
 
+# nbtstat's name table lists the machine name against the <00> UNIQUE entry.
+# The Status column is localised on non-English Windows, so only the
+# language-independent part of the line is matched.
+_NBT_NAME = re.compile(r"^\s*(\S+)\s*<00>\s+UNIQUE", re.MULTILINE | re.IGNORECASE)
+
+
+def netbios_name(ip: str, timeout: float = 5.0) -> str | None:
+    """Ask the host for its NetBIOS name. Works without any DNS record.
+
+    The fallback for machines that answer ping but have no PTR entry and
+    can't be reached over WMI. Returns None on any failure.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        result = run_hidden(["nbtstat", "-A", ip], timeout=timeout)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    match = _NBT_NAME.search(result.stdout or "")
+    return match.group(1) if match else None
+
+
 def resolve_and_ping(target: str, ping_timeout_ms: int | None = None) -> dict:
     """Phase-1 probe: work out the address, then send one ping.
 
@@ -58,14 +81,16 @@ def resolve_and_ping(target: str, ping_timeout_ms: int | None = None) -> dict:
     if _is_ip_literal(target):
         ip = target
         ok = _ping(ip, ping_timeout_ms)
-        # Only pay for a PTR lookup on addresses that actually answered —
+        # Only pay for name lookups on addresses that actually answered —
         # a dead /24 would otherwise cost hundreds of pointless queries.
         resolved_name = None
         if ok:
             try:
                 resolved_name = socket.gethostbyaddr(ip)[0]
             except OSError:
-                resolved_name = None
+                # No PTR record (common on networks that don't register
+                # reverse DNS) — ask the host over NetBIOS instead.
+                resolved_name = netbios_name(ip)
         return {
             "ip": ip,
             "dns_ok": True,   # nothing to resolve; the address was given
@@ -92,6 +117,7 @@ _CHECK_SCRIPT = r"""
 $result = [ordered]@{
     ComputerName = $ComputerName
     WmiOk = $false
+    Name = $null
     PartOfDomain = $null
     Domain = $null
     DHCPServer = $null
@@ -133,6 +159,9 @@ if ($session) {
     try {
         $cs = Get-CimInstance -CimSession $session -ClassName Win32_ComputerSystem -OperationTimeoutSec 15 -ErrorAction Stop
         $result.WmiOk = $true
+        # The machine's own name — the authoritative answer for a subnet scan,
+        # where the target is an IP and DNS may hold no PTR record.
+        $result.Name = if ($cs.DNSHostName) { $cs.DNSHostName } else { $cs.Name }
         $result.PartOfDomain = [bool]$cs.PartOfDomain
         $result.Domain = $cs.Domain
     } catch { Note-Error $_ }
@@ -181,6 +210,7 @@ def _failed_result(computer_name: str, error: str) -> dict:
     return {
         "computer_name": computer_name,
         "wmi_ok": False,
+        "wmi_name": None,
         "part_of_domain": None,
         "domain": None,
         "dhcp_server": None,
@@ -252,6 +282,7 @@ def check_computer(
     return {
         "computer_name": data.get("ComputerName", computer_name),
         "wmi_ok": wmi_ok,
+        "wmi_name": data.get("Name"),
         "part_of_domain": data.get("PartOfDomain"),
         "domain": data.get("Domain"),
         "dhcp_server": data.get("DHCPServer"),

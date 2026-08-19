@@ -13,9 +13,11 @@ Single-page UI with three buttons:
   (substring match) before it hits a big domain.
 - **Load Subnet** — scans an IP range instead of the AD list: accepts CIDRs
   (`10.20.30.0/24`), ranges (`10.20.30.10-50` or the full form), and single
-  addresses, comma- or space-separated. Live addresses are named by reverse
-  DNS, and if AD was loaded first each host is matched back to its computer
-  account — anything answering without one is flagged **Not in AD**, which
+  addresses, comma- or space-separated. Live addresses are named from
+  whichever source answers first — the name the host reports over WMI, else
+  reverse DNS, else NetBIOS (`nbtstat`) — so hosts still get named on
+  networks that register no PTR records. If AD was loaded first each host is
+  matched back to its computer account — anything answering without one is flagged **Not in AD**, which
   is how unmanaged or rogue devices surface. A **Live hosts only** checkbox
   hides the addresses that never answered (a /24 is mostly empty), and the
   range size is capped (default 4096) so a stray `/8` can't be expanded.
