@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+
+# run skill scratch
+shots/
+.run-tmp/
