@@ -19,9 +19,10 @@ Single-page UI with three buttons:
   — so hosts still get named on networks with no PTR records, with NetBIOS
   disabled, and where WMI is refused. Set the **DHCP server** in Settings to
   enable the lease lookup; it is a single query for the whole scan and the
-  device's MAC address shows in the Computer column's tooltip. If AD was
-  loaded first each host is matched back to its computer account — anything answering without one is flagged **Not in AD**, which
-  is how unmanaged or rogue devices surface. A **Live hosts only** checkbox
+  device's MAC address fills the **MAC** column. If AD was loaded first each
+  host is matched back to its computer account — anything answering without
+  one is flagged **Not in AD**, which is how unmanaged or rogue devices
+  surface. A **Live hosts only** checkbox
   hides the addresses that never answered (a /24 is mostly empty), and the
   range size is capped (default 4096) so a stray `/8` can't be expanded.
 - **Check Status** — scans all loaded computers on a background `QThread`
@@ -39,6 +40,15 @@ Single-page UI with three buttons:
     `(Stale)` and a disabled account shows `(Disabled)` — both strong
     signals the machine has fallen off the domain. A live WMI result
     showing the machine isn't joined shows `Not Joined`.
+  - **MAC** — the hardware address, normalised to `AA-BB-CC-DD-EE-FF` from
+    whichever source answered: the host over WMI, else the DHCP lease, else
+    this machine's ARP cache (same-subnet hosts only, populated by the ping
+    just sent). The tooltip names the source, since they differ in
+    trustworthiness.
+  - **User Login** — who holds the interactive console session, from
+    `Win32_ComputerSystem.UserName`. Shows the account, with the full
+    `DOMAIN\user` in the tooltip. Blank when nobody is signed in locally —
+    an RDP-only session does not set it.
   - **DHCP Server** — the DHCP server that leased the machine's active IP
   - **OS Version** — live OS caption, falling back to the AD-recorded OS
   - **Uptime** — time since last boot
@@ -73,9 +83,11 @@ Single-page UI with three buttons:
   allow WMI). Saved to `%LOCALAPPDATA%\DHCPLeaseInspector\settings.json`.
 
 A summary line above the table live-counts every status (Total / Ready /
-Domain Issue / Patch Overdue / Not in AD / Offline / Error / No DNS). Rows are color-coded (green =
-Ready, yellow = Domain Issue, red = Offline/Error/No DNS), every column is
-click-to-sort, and a **Show** dropdown filters the table to one status.
+Domain Issue / Patch Overdue / Not in AD / Offline / Error / No DNS). Rows are
+color-coded — green for `Ready`, yellow for the needs-a-look statuses
+(`Domain Issue`, `Patch Overdue`, `Not in AD`), red for `Offline` / `Error` /
+`No DNS`. Every column is click-to-sort (addresses sort numerically, not as
+text), and a **Show** dropdown filters the table to one status.
 Hovering a failed row shows the underlying error (e.g. Access Denied vs
 timeout) as a tooltip.
 

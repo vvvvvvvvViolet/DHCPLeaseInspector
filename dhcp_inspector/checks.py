@@ -50,6 +50,31 @@ def _ping(ip: str, ping_timeout_ms: int) -> bool:
 _NBT_NAME = re.compile(r"^\s*(\S+)\s*<00>\s+UNIQUE", re.MULTILINE | re.IGNORECASE)
 
 
+# `arp -a <ip>` prints "  10.20.30.5   00-11-22-33-44-55   dynamic"; the Type
+# column is localised on non-English Windows, so only the pair is matched.
+_ARP_MAC = re.compile(
+    r"^\s*(?:\d{1,3}\.){3}\d{1,3}\s+([0-9a-f]{2}(?:[-:][0-9a-f]{2}){5})",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+
+def arp_mac(ip: str, timeout: float = 5.0) -> str | None:
+    """Read the host's MAC from the local ARP cache.
+
+    The ping just sent populates the cache, so this costs one local lookup
+    and no access to the target at all. Only works for hosts on the same
+    layer-2 segment; returns None for anything routed.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        result = run_hidden(["arp", "-a", ip], timeout=timeout)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    match = _ARP_MAC.search(result.stdout or "")
+    return match.group(1) if match else None
+
+
 def netbios_name(ip: str, timeout: float = 5.0) -> str | None:
     """Ask the host for its NetBIOS name. Works without any DNS record.
 
@@ -84,6 +109,7 @@ def resolve_and_ping(target: str, ping_timeout_ms: int | None = None) -> dict:
         # Only pay for name lookups on addresses that actually answered —
         # a dead /24 would otherwise cost hundreds of pointless queries.
         resolved_name = None
+        arp = None
         if ok:
             try:
                 resolved_name = socket.gethostbyaddr(ip)[0]
@@ -91,11 +117,13 @@ def resolve_and_ping(target: str, ping_timeout_ms: int | None = None) -> dict:
                 # No PTR record (common on networks that don't register
                 # reverse DNS) — ask the host over NetBIOS instead.
                 resolved_name = netbios_name(ip)
+            arp = arp_mac(ip)
         return {
             "ip": ip,
             "dns_ok": True,   # nothing to resolve; the address was given
             "ping": ok,
             "resolved_name": resolved_name,
+            "arp_mac": arp,
             "error": None,
         }
 
@@ -104,7 +132,14 @@ def resolve_and_ping(target: str, ping_timeout_ms: int | None = None) -> dict:
     except OSError:
         return {"ip": None, "dns_ok": False, "ping": False, "error": "DNS lookup failed"}
 
-    return {"ip": ip, "dns_ok": True, "ping": _ping(ip, ping_timeout_ms), "error": None}
+    ok = _ping(ip, ping_timeout_ms)
+    return {
+        "ip": ip,
+        "dns_ok": True,
+        "ping": ok,
+        "arp_mac": arp_mac(ip) if ok else None,
+        "error": None,
+    }
 
 
 # The computer name is prepended as a $ComputerName assignment (see
@@ -118,6 +153,8 @@ $result = [ordered]@{
     ComputerName = $ComputerName
     WmiOk = $false
     Name = $null
+    UserName = $null
+    Mac = $null
     PartOfDomain = $null
     Domain = $null
     DHCPServer = $null
@@ -162,6 +199,9 @@ if ($session) {
         # The machine's own name — the authoritative answer for a subnet scan,
         # where the target is an IP and DNS may hold no PTR record.
         $result.Name = if ($cs.DNSHostName) { $cs.DNSHostName } else { $cs.Name }
+        # Whoever holds the interactive console session, as DOMAIN\user. Null
+        # when nobody is signed in locally (an RDP-only session doesn't set it).
+        $result.UserName = $cs.UserName
         $result.PartOfDomain = [bool]$cs.PartOfDomain
         $result.Domain = $cs.Domain
     } catch { Note-Error $_ }
@@ -179,6 +219,7 @@ if ($session) {
             $nic = Get-CimInstance -CimSession $session -ClassName Win32_NetworkAdapterConfiguration `
                 -Filter "IPEnabled=True AND DHCPEnabled=True" -OperationTimeoutSec 15 -ErrorAction Stop | Select-Object -First 1
             $result.DHCPServer = $nic.DHCPServer
+            $result.Mac = $nic.MACAddress
         } catch { Note-Error $_ }
 
         try {
@@ -211,6 +252,8 @@ def _failed_result(computer_name: str, error: str) -> dict:
         "computer_name": computer_name,
         "wmi_ok": False,
         "wmi_name": None,
+        "user_login": None,
+        "wmi_mac": None,
         "part_of_domain": None,
         "domain": None,
         "dhcp_server": None,
@@ -282,6 +325,8 @@ def check_computer(
         "computer_name": data.get("ComputerName", computer_name),
         "wmi_ok": wmi_ok,
         "wmi_name": data.get("Name"),
+        "user_login": data.get("UserName"),
+        "wmi_mac": data.get("Mac"),
         "part_of_domain": data.get("PartOfDomain"),
         "domain": data.get("Domain"),
         "dhcp_server": data.get("DHCPServer"),

@@ -1,4 +1,5 @@
 """Derives uptime, domain health, and an overall status from a check result."""
+import re
 from datetime import datetime
 
 from . import config
@@ -57,6 +58,44 @@ def patch_overdue(check: dict) -> bool:
         return False
     age_days = (_now_like(patch) - patch).days
     return age_days > config.get_settings().stale_patch_days
+
+
+def format_mac(check: dict) -> tuple[str, str]:
+    """Pick the best MAC for a row and normalise it. Returns (text, tooltip).
+
+    The three sources disagree on punctuation and case — WMI gives
+    `00:1A:2B:…`, a DHCP ClientId `00-11-22-…` or bare hex, ARP
+    `00-11-22-…` — so they're all rendered as uppercase dash-separated to
+    stay comparable. The tooltip records which source answered, since they
+    differ in trustworthiness.
+    """
+    for value, source in ((check.get("wmi_mac"), "reported by the host over WMI"),
+                          (check.get("lease_mac"), "from the DHCP lease"),
+                          (check.get("arp_mac"), "from this machine's ARP cache")):
+        if not value:
+            continue
+        hex_digits = re.sub(r"[^0-9A-Fa-f]", "", value)
+        if len(hex_digits) != 12:
+            # Not a plain 48-bit address (some DHCP ClientIds carry a type
+            # prefix) — show it as-is rather than mangling it.
+            return value, source
+        pairs = [hex_digits[i:i + 2] for i in range(0, 12, 2)]
+        return "-".join(pairs).upper(), source
+    return "-", ""
+
+
+def format_user_login(check: dict) -> tuple[str, str]:
+    """Returns (cell text, tooltip) for the logged-on user."""
+    user = (check.get("user_login") or "").strip()
+    if not user:
+        return "-", ""
+    # Win32_ComputerSystem reports DOMAIN\user; the account is the useful
+    # half in a single-domain fleet, so lead with it and keep the full
+    # value in the tooltip.
+    if "\\" in user:
+        domain, _, account = user.partition("\\")
+        return account, f"{user} (domain {domain})"
+    return user, user
 
 
 def domain_health(check: dict) -> str:

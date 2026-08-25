@@ -31,12 +31,20 @@ from PyQt5.QtWidgets import (
 from . import ad_utils, config, export_excel, history, scoring, subnet
 from .worker import ScanWorker
 
-HEADERS = ["Computer", "IP", "Ping", "Domain", "DHCP Server", "OS Version",
-           "Uptime", "Last Logon", "Last Patch", "Status", "Change"]
-_LAST_LOGON_COL = 7
-_LAST_PATCH_COL = 8
-_STATUS_COL = 9
-_CHANGE_COL = 10
+HEADERS = ["Computer", "IP", "MAC", "Ping", "Domain", "User Login", "DHCP Server",
+           "OS Version", "Uptime", "Last Logon", "Last Patch", "Status", "Change"]
+_MAC_COL = 2
+_DOMAIN_COL = 4
+_USER_COL = 5
+_OS_COL = 7
+
+# Wide enough for a full MAC, an FQDN-ish domain and an OS caption; narrow
+# for the short verdict columns. The last column stretches into the slack.
+_COLUMN_WIDTHS = [150, 105, 140, 55, 135, 105, 115, 135, 70, 95, 95, 105, 110]
+_LAST_LOGON_COL = 9
+_LAST_PATCH_COL = 10
+_STATUS_COL = 11
+_CHANGE_COL = 12
 
 _COLOR_GOOD = QColor("#c8e6c9")   # green  — Ready
 _COLOR_WARN = QColor("#fff9c4")   # yellow — Domain Issue / Patch Overdue / Not in AD
@@ -201,7 +209,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("DHCP Lease Inspector")
-        self.resize(1180, 620)
+        self.resize(1420, 640)
 
         self._worker = None
         self._ad_info = {}            # computer name -> AD record
@@ -280,7 +288,15 @@ class MainWindow(QMainWindow):
 
         self.table = QTableWidget(0, len(HEADERS))
         self.table.setHorizontalHeaderLabels(HEADERS)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        # Sized per column rather than stretched equally: at 13 columns an
+        # even split truncates the values you most need to read whole, like a
+        # MAC address. Columns stay drag-resizable, and the table scrolls
+        # horizontally on a narrow window.
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Interactive)
+        header.setStretchLastSection(True)
+        for col, width in enumerate(_COLUMN_WIDTHS):
+            self.table.setColumnWidth(col, width)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         # Explicit A->Z default: re-enabling sorting re-applies the current
         # indicator, and Qt's implicit default is column 0 descending.
@@ -366,15 +382,19 @@ class MainWindow(QMainWindow):
             self.table.setItem(row, 0, QTableWidgetItem(name))
             # Pre-fill everything AD already knows, so the list is useful
             # before (or without) a live scan.
-            self.table.setItem(row, 3, QTableWidgetItem(record.get("domain") or "-"))
-            self.table.setItem(row, 5, QTableWidgetItem(record.get("ad_os") or "-"))
+            self.table.setItem(row, _DOMAIN_COL, QTableWidgetItem(record.get("domain") or "-"))
+            self.table.setItem(row, _OS_COL, QTableWidgetItem(record.get("ad_os") or "-"))
             logon_text, logon_tip = scoring.format_last_logon(record.get("last_logon"))
             logon_item = QTableWidgetItem(logon_text)
             if logon_tip:
                 logon_item.setToolTip(logon_tip)
             self.table.setItem(row, _LAST_LOGON_COL, logon_item)
-            for col in (1, 2, 4, 6, _LAST_PATCH_COL, _STATUS_COL, _CHANGE_COL):
-                self.table.setItem(row, col, QTableWidgetItem("-"))
+            # Everything else is unknown until a scan runs. Filled by column
+            # count rather than a hand-written index list, so adding a column
+            # can't silently leave a cell empty.
+            for col in range(1, len(HEADERS)):
+                if self.table.item(row, col) is None:
+                    self.table.setItem(row, col, QTableWidgetItem("-"))
         self.table.setSortingEnabled(True)
         self.progress.setValue(0)
         self.progress.setMaximum(max(self.table.rowCount(), 1))
@@ -507,6 +527,9 @@ class MainWindow(QMainWindow):
         if result.get("dns_ok") is False:
             ping_text = "No DNS"
 
+        mac_text, mac_tip = scoring.format_mac(result)
+        user_text, user_tip = scoring.format_user_login(result)
+
         change_item = self.table.item(row, _CHANGE_COL)
         values = [
             # On a subnet scan the target is an IP, so show the best name we
@@ -515,8 +538,10 @@ class MainWindow(QMainWindow):
             (result.get("wmi_name") or result.get("resolved_name")
              or result.get("lease_name") or result["computer_name"]),
             result.get("ip") or "-",
+            mac_text,
             ping_text,
             scoring.domain_label(result),
+            user_text,
             result.get("dhcp_server") or "-",
             result.get("os_version") or result.get("ad_os") or "-",
             uptime,
@@ -525,6 +550,10 @@ class MainWindow(QMainWindow):
             status,
             change_item.text() if change_item else "-",
         ]
+        # Per-column tooltips, applied after the shared error tooltip so a
+        # column that knows something specific wins.
+        tips = {_LAST_LOGON_COL: logon_tip, _LAST_PATCH_COL: patch_tip,
+                _MAC_COL: mac_tip, _USER_COL: user_tip}
         for col, value in enumerate(values):
             item = _IPItem(value) if col in (0, 1) else QTableWidgetItem(value)
             item.setBackground(color)
@@ -532,13 +561,8 @@ class MainWindow(QMainWindow):
             # tooltip so it isn't lost behind a bare "-" or "Offline".
             if error:
                 item.setToolTip(error)
-            if col == _LAST_LOGON_COL and logon_tip:
-                item.setToolTip(logon_tip)
-            if col == _LAST_PATCH_COL and patch_tip:
-                item.setToolTip(patch_tip)
-            # The MAC is often the only handle on a device nothing could name.
-            if col == 0 and result.get("lease_mac"):
-                item.setToolTip(f"MAC {result['lease_mac']} (from DHCP lease)")
+            if tips.get(col):
+                item.setToolTip(tips[col])
             self.table.setItem(row, col, item)
 
         self._update_summary()

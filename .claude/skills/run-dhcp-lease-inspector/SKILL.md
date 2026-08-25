@@ -60,7 +60,7 @@ printf '%s\n' \
 ```
 
 Verified output ends with `Total 4 | … | Offline 4` and
-`saved …/shots/01-scan.png (1180x620)`. **Open the PNG and look at it** — a
+`saved …/shots/01-scan.png (1420x640)`. **Open the PNG and look at it** — a
 blank frame means the window never mapped.
 
 Commands: `state`, `headers`, `table [n]`, `set <attr> <text>`,
@@ -105,6 +105,7 @@ rows = [
  {"computer_name":"A-C14-PROV","ip":"10.20.30.1","ping":True,"wmi_ok":True,"part_of_domain":True,
   "domain":"corp.local","dhcp_server":"10.20.30.254","os_version":"Windows 11 Pro",
   "last_boot":iso(2),"last_patch":iso(5),"recent_hotfixes":"KB5031354 (2026-08-16)",
+  "wmi_mac":"00:1a:2b:3c:4d:5e","user_login":"CORP\\tunva",
   "ad_password_last_set":iso(3),"ad_last_logon":iso(1),"in_ad":True},                   # Ready
  {"computer_name":"V-D35-MMI","ip":"10.20.30.2","ping":True,"wmi_ok":True,
   "last_patch":iso(300),"ad_password_last_set":iso(2),"in_ad":True},                    # Patch Overdue
@@ -179,7 +180,7 @@ tests.
   this container, so `checks._ping` returns False for every host, phase 2 (WMI)
   is skipped entirely, and no host is ever named. This is correct behaviour, not
   a failure — but it means a real scan can't validate any rendering change.
-- **The window is 1180x620 regardless of the X screen size**, since `grab()`
+- **The window is 1420x640 regardless of the X screen size**, since `grab()`
   captures the widget, not the screen. Making the Xvfb screen bigger doesn't
   show more rows; `eval w.resize(1600, 900)` does.
 - **`shot` after `quit` produces nothing** — the app has already exited. Put
