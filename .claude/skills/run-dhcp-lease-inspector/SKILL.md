@@ -175,6 +175,12 @@ result needs only `{"computer", "ok", "partial", "error", "apps": [...]}`. A rea
 started by `click software_btn` also appends a "(scan failed)" row on Linux;
 that is expected, not a bug in the policy code.
 
+The editor's Import/Export open native file dialogs, which can't be driven
+here. Call the methods they wrap instead — `dialog.export_to(path)` and
+`dialog.import_from(path)` — e.g. by replacing `PolicyDialog.exec_` through
+`eval`, as the tests do; `policy.export_policy` / `policy.import_policy` need
+no Qt at all.
+
 ## Run: direct invocation (no GUI)
 
 Most changes land in `scoring.py`, `subnet.py` or `checks.py`, which are pure
@@ -209,7 +215,7 @@ pip install -r requirements.txt -r requirements-dev.txt   # adds pytest, pytest-
 python3 -m pytest
 ```
 
-154 tests, ~1 s, no display needed (`QT_QPA_PLATFORM=offscreen` is set in
+178 tests, ~1 s, no display needed (`QT_QPA_PLATFORM=offscreen` is set in
 `tests/conftest.py`). Every Windows call is mocked at `run_powershell` /
 `run_hidden` / `_ping`, so they run on Linux; the GUI tests drive the real
 `MainWindow` and the real `ScanWorker` threads. Each test gets its own

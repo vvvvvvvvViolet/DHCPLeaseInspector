@@ -67,12 +67,65 @@ def load_policy() -> Policy:
         return Policy()  # missing or corrupt file -> no rules
 
 
-def save_policy(policy: Policy) -> None:
-    _policy_path().write_text(
-        json.dumps({"forbidden": policy.forbidden, "required": policy.required},
-                   indent=2, ensure_ascii=False),
-        encoding="utf-8",
+def _to_json(policy: Policy) -> str:
+    return json.dumps(
+        {"version": 1, "forbidden": policy.forbidden, "required": policy.required},
+        indent=2, ensure_ascii=False,
     )
+
+
+def save_policy(policy: Policy) -> None:
+    _policy_path().write_text(_to_json(policy), encoding="utf-8")
+
+
+# --- import / export ------------------------------------------------------
+
+# A policy is a short list of titles; anything bigger is the wrong file.
+MAX_IMPORT_BYTES = 1_000_000
+MAX_RULES_PER_LIST = 1000
+
+
+def export_policy(path: str, policy: Policy) -> None:
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(_to_json(policy))
+
+
+def import_policy(path: str) -> Policy:
+    """Read a policy file written by export_policy.
+
+    Raises ValueError, with a message fit to show the user, for anything
+    that is not a policy. Strictness is deliberate: importing a stray
+    settings.json as an empty policy would silently wipe the real one.
+    """
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read(MAX_IMPORT_BYTES + 1)
+    except OSError as exc:
+        raise ValueError(f"Could not read the file: {exc}") from exc
+    if len(raw) > MAX_IMPORT_BYTES:
+        raise ValueError("That file is too large to be a software policy.")
+
+    try:
+        # utf-8-sig: Notepad on Windows writes a byte-order mark.
+        data = json.loads(raw.decode("utf-8-sig"))
+    except (UnicodeDecodeError, ValueError):
+        raise ValueError("That file is not valid JSON, so it is not a software policy.") from None
+
+    if not isinstance(data, dict) or not ({"forbidden", "required"} & data.keys()):
+        raise ValueError(
+            'That file is not a software policy: it has no "forbidden" or "required" list.'
+        )
+
+    lists = {}
+    for key in ("forbidden", "required"):
+        value = data.get(key, [])
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise ValueError(f'"{key}" must be a list of text entries.')
+        rules = parse_rules("\n".join(value))
+        if len(rules) > MAX_RULES_PER_LIST:
+            raise ValueError(f'"{key}" has {len(rules)} entries; the limit is {MAX_RULES_PER_LIST}.')
+        lists[key] = rules
+    return Policy(forbidden=lists["forbidden"], required=lists["required"])
 
 
 # --- evaluation -----------------------------------------------------------

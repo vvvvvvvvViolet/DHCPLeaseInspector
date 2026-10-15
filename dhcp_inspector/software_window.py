@@ -69,7 +69,79 @@ class PolicyDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
+        self.import_btn = buttons.addButton("Import…", QDialogButtonBox.ActionRole)
+        self.export_btn = buttons.addButton("Export…", QDialogButtonBox.ActionRole)
+        self.import_btn.setToolTip("Load a policy file into the lists above (nothing is saved until OK)")
+        self.export_btn.setToolTip("Save the lists above to a file you can share with another computer")
+        self.import_btn.clicked.connect(self.on_import)
+        self.export_btn.clicked.connect(self.on_export)
         layout.addWidget(buttons)
+
+    # ----- import / export -----
+
+    def on_export(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Software Policy", "software_policy.json", "Policy files (*.json)"
+        )
+        if not path:
+            return
+        try:
+            self.export_to(path)
+        except OSError as exc:
+            QMessageBox.critical(self, "Export failed", str(exc))
+            return
+        QMessageBox.information(self, "Software Policy", f"Saved to {path}")
+
+    def on_import(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Software Policy", "", "Policy files (*.json);;All files (*)"
+        )
+        if not path:
+            return
+        try:
+            self.import_from(path)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Import failed", str(exc))
+
+    def export_to(self, path: str):
+        # What is on screen, saved or not — exporting should never surprise
+        # by writing an older list than the one being looked at.
+        software_policy.export_policy(path, self.policy())
+
+    def import_from(self, path: str) -> str | None:
+        """Load a file into the editors. Returns "replace", "merge", or None if
+        the user backed out. Raises ValueError if the file isn't a policy."""
+        incoming = software_policy.import_policy(path)
+        current = self.policy()
+        mode = "replace"
+        if not current.empty:
+            mode = self._ask_replace_or_merge()
+            if mode is None:
+                return None
+        if mode == "merge":
+            incoming = software_policy.Policy(
+                forbidden=software_policy.parse_rules("\n".join(current.forbidden + incoming.forbidden)),
+                required=software_policy.parse_rules("\n".join(current.required + incoming.required)),
+            )
+        self.forbidden_edit.setPlainText("\n".join(incoming.forbidden))
+        self.required_edit.setPlainText("\n".join(incoming.required))
+        return mode
+
+    def _ask_replace_or_merge(self) -> str | None:
+        box = QMessageBox(self)
+        box.setWindowTitle("Import Software Policy")
+        box.setText("The lists already have entries.\n\nReplace them with the imported policy, "
+                    "or merge the imported entries into them?")
+        replace_btn = box.addButton("Replace", QMessageBox.DestructiveRole)
+        merge_btn = box.addButton("Merge", QMessageBox.AcceptRole)
+        box.addButton(QMessageBox.Cancel)
+        box.exec_()
+        clicked = box.clickedButton()
+        if clicked is replace_btn:
+            return "replace"
+        if clicked is merge_btn:
+            return "merge"
+        return None
 
     def policy(self) -> software_policy.Policy:
         return software_policy.Policy(

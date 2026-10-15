@@ -101,6 +101,13 @@ Single-page UI with three buttons:
   reported absent when the whole list was read. With rules defined, the
   Excel export gains a Policy column, a verdict per computer in Scan Status,
   and a **Policy Violations** sheet listing every breach.
+  **Export…** / **Import…** in the policy editor share a policy between
+  computers as a small JSON file. Export writes what is on screen, saved or
+  not. Import only loads the file into the editor — nothing is saved until
+  OK — and if the lists already have entries it asks whether to **replace**
+  them or **merge** (duplicates ignored). A file that is not a policy, such
+  as a stray `settings.json`, is refused with a reason rather than imported
+  as an empty list that would wipe the real one.
 - **Credentials** — optionally run the WMI checks as a different account
   (e.g. a domain admin) instead of the user who launched the app. This is
   usually what makes the DHCP / OS / Uptime columns populate: without
