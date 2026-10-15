@@ -74,26 +74,46 @@ def export_to_excel(path: str, rows: list[list[str]], headers: list[str]) -> Non
     workbook.save(path)
 
 
-def export_software(path: str, results: list[dict]) -> None:
+def export_software(path: str, results: list[dict], policy=None) -> None:
     """Write a software inventory workbook.
 
     Sheets: "Software" (one row per computer x title, filterable), "Summary"
     (each title once, with how many computers have it and which versions),
     and "Scan Status" (one row per computer, so failures aren't silently
     missing from the inventory).
+
+    With a policy that has rules, "Software" gains a Policy column flagging
+    forbidden titles, "Scan Status" gains a verdict per computer, and a
+    "Policy Violations" sheet lists every breach. Without rules the layout
+    is unchanged.
     """
     from openpyxl import Workbook
 
+    from . import policy as software_policy
+
     ordered = sorted(results, key=lambda r: r["computer"].casefold())
+    use_policy = policy is not None and not policy.empty
+    verdicts = {r["computer"]: software_policy.evaluate(r, policy) for r in ordered} if use_policy else {}
     workbook = Workbook()
 
     sheet = workbook.active
     sheet.title = "Software"
-    _bold_header(sheet, ["Computer", "Software", "Version", "Publisher", "Install Date", "Scope"])
+    headers = ["Computer", "Software", "Version", "Publisher", "Install Date", "Scope"]
+    _bold_header(sheet, headers + (["Policy"] if use_policy else []))
     for result in ordered:
+        flagged = {}
+        if use_policy:
+            for rule, app in verdicts[result["computer"]]["forbidden"]:
+                flagged.setdefault(id(app), []).append(rule)
         for app in result["apps"]:
-            _append_text_row(sheet, [result["computer"], app["name"], app["version"],
-                                     app["publisher"], app["install_date"], app["scope"]])
+            row = [result["computer"], app["name"], app["version"],
+                   app["publisher"], app["install_date"], app["scope"]]
+            if use_policy:
+                rules = flagged.get(id(app))
+                row.append("Forbidden: " + ", ".join(rules) if rules else "")
+            _append_text_row(sheet, row)
+            if use_policy and flagged.get(id(app)):
+                _fill_row(sheet, sheet.max_row, _FILL_BAD)
     sheet.auto_filter.ref = sheet.dimensions
     _autosize(sheet)
 
@@ -123,7 +143,8 @@ def export_software(path: str, results: list[dict]) -> None:
     _autosize(summary)
 
     status = workbook.create_sheet("Scan Status")
-    _bold_header(status, ["Computer", "Result", "Apps Found", "Error"])
+    _bold_header(status, ["Computer", "Result", "Apps Found", "Error"]
+                 + (["Policy"] if use_policy else []))
     for result in ordered:
         if not result["ok"]:
             verdict, fill_hex = "Failed", _FILL_BAD
@@ -131,10 +152,28 @@ def export_software(path: str, results: list[dict]) -> None:
             verdict, fill_hex = "Partial", _FILL_WARN
         else:
             verdict, fill_hex = "OK", _FILL_GOOD
-        _append_text_row(status, [result["computer"], verdict, len(result["apps"]),
-                                  result.get("error") or ""])
+        row = [result["computer"], verdict, len(result["apps"]), result.get("error") or ""]
+        if use_policy:
+            row.append(verdicts[result["computer"]]["status"])
+        _append_text_row(status, row)
         _fill_row(status, status.max_row, fill_hex)
     status.auto_filter.ref = status.dimensions
     _autosize(status)
+
+    if use_policy:
+        breaches = workbook.create_sheet("Policy Violations")
+        _bold_header(breaches, ["Computer", "Violation", "Rule", "Software Found", "Version"])
+        for result in ordered:
+            verdict = verdicts[result["computer"]]
+            for rule, app in verdict["forbidden"]:
+                _append_text_row(breaches, [result["computer"], "Forbidden software installed",
+                                            rule, app["name"], app["version"]])
+                _fill_row(breaches, breaches.max_row, _FILL_BAD)
+            for rule in verdict["missing"]:
+                _append_text_row(breaches, [result["computer"], "Required software missing",
+                                            rule, "", ""])
+                _fill_row(breaches, breaches.max_row, _FILL_WARN)
+        breaches.auto_filter.ref = breaches.dimensions
+        _autosize(breaches)
 
     workbook.save(path)

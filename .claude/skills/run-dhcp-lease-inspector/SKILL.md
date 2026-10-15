@@ -166,6 +166,16 @@ without the save dialog — check its sheets with
 `python3 -c "from openpyxl import load_workbook as L; print(L('/tmp/inventory.xlsx').sheetnames)"`
 → `['Software', 'Summary', 'Scan Status']`.
 
+### Software policy
+
+`policy.save_policy(...)` before opening the inventory (or `eval` it in the
+driver) makes `feed-software` rows come back judged. `Policy…` / `Software
+Policy` open a modal editor, so use `click-modal policy_btn <name>`. Add
+`"in_ad"`-style fakes are not needed here — a result is just
+`{"computer", "ok", "partial", "error", "apps": [...]}`. A real inventory
+started by `click software_btn` also appends a "(scan failed)" row on Linux;
+that is expected, not a bug in the policy code.
+
 ## Run: direct invocation (no GUI)
 
 Most changes land in `scoring.py`, `subnet.py` or `checks.py`, which are pure
@@ -200,7 +210,7 @@ pip install -r requirements.txt -r requirements-dev.txt   # adds pytest, pytest-
 python3 -m pytest
 ```
 
-121 tests, ~1 s, no display needed (`QT_QPA_PLATFORM=offscreen` is set in
+154 tests, ~1 s, no display needed (`QT_QPA_PLATFORM=offscreen` is set in
 `tests/conftest.py`). Every Windows call is mocked at `run_powershell` /
 `run_hidden` / `_ping`, so they run on Linux; the GUI tests drive the real
 `MainWindow` and the real `ScanWorker` threads. Each test gets its own

@@ -84,6 +84,23 @@ Single-page UI with three buttons:
   consistency check, and possibly a repair, on every MSI product on the
   target. Expect seconds to a few minutes per machine; asks before
   inventorying more than 20.
+- **Software Policy** — you maintain two lists yourself, in the app (no code
+  change): **forbidden** software (e.g. AnyDesk, uTorrent) and **required**
+  software (e.g. your antivirus). Open it from the **Software Policy**
+  button, or **Policy…** inside the inventory window; it is saved to
+  `%LOCALAPPDATA%\DHCPLeaseInspector\software_policy.json`. One entry per
+  line; matching ignores case and finds the text anywhere in the software
+  name (`teamviewer` matches "TeamViewer 15 Host"); `*` matches any
+  characters (`anydesk*`, `microsoft * 2019`); every other character is
+  literal, so `Visual C++ 2015 (x64)` works; lines starting with `#` are
+  ignored. The inventory window then highlights forbidden titles, adds a row
+  for each missing required title, shows a Policy column and a
+  Violations / Compliant / Unknown count, and editing the lists re-judges
+  the results already on screen. Computers that failed or returned an
+  incomplete list are **Unknown**, never "missing" — a title is only
+  reported absent when the whole list was read. With rules defined, the
+  Excel export gains a Policy column, a verdict per computer in Scan Status,
+  and a **Policy Violations** sheet listing every breach.
 - **Credentials** — optionally run the WMI checks as a different account
   (e.g. a domain admin) instead of the user who launched the app. This is
   usually what makes the DHCP / OS / Uptime columns populate: without
@@ -173,7 +190,8 @@ dhcp_inspector/
   subnet.py            # expands CIDRs/ranges into the addresses to probe
   dhcp_leases.py       # reads the DHCP server's lease table (ip -> name/MAC)
   software.py          # installed-software inventory via StdRegProv
-  software_window.py   # inventory window + its background worker
+  software_window.py   # inventory window, policy editor, background worker
+  policy.py            # forbidden / required software lists and their evaluation
   checks.py           # DNS/PTR+ping probe, and the WMI check over DCOM
   scoring.py           # uptime/last-logon formatting + AD domain health + status
   config.py            # user settings (thresholds, parallelism, timeouts)

@@ -29,7 +29,7 @@ from PyQt5.QtWidgets import (
 )
 
 from . import ad_utils, config, export_excel, history, scoring, subnet
-from .software_window import SoftwareWindow
+from .software_window import SoftwareWindow, edit_policy
 from .worker import ScanWorker
 
 HEADERS = ["Computer", "IP", "MAC", "Ping", "Domain", "User Login", "DHCP Server",
@@ -288,6 +288,12 @@ class MainWindow(QMainWindow):
             "selected, on every row whose last scan reached WMI."
         )
         scan_row.addWidget(self.software_btn)
+        self.policy_btn = QPushButton("Software Policy")
+        self.policy_btn.setToolTip(
+            "Edit the lists of forbidden and required software that Software "
+            "Inventory checks each computer against."
+        )
+        scan_row.addWidget(self.policy_btn)
         scan_row.addStretch(1)
         scan_row.addWidget(QLabel("Show:"))
         self.status_filter = QComboBox()
@@ -343,6 +349,7 @@ class MainWindow(QMainWindow):
         self.cancel_btn.clicked.connect(self.on_cancel)
         self.export_btn.clicked.connect(self.on_export_excel)
         self.software_btn.clicked.connect(self.on_software)
+        self.policy_btn.clicked.connect(lambda: edit_policy(self))
         self.status_filter.currentTextChanged.connect(self.apply_status_filter)
 
     # ----- summary -----
