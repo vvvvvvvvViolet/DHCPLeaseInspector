@@ -181,6 +181,30 @@ here. Call the methods they wrap instead — `dialog.export_to(path)` and
 `eval`, as the tests do; `policy.export_policy` / `policy.import_policy` need
 no Qt at all.
 
+## Run: Diagnose window
+
+Unlike the other windows, Diagnose is useful for real on Linux — nothing needs
+faking. `localhost` runs the genuine DNS lookup and port probes, and reports the
+Windows-only steps as skipped:
+
+```bash
+printf '%s\n' \
+  'click diagnose_btn' \
+  "eval w._diagnose_dialog.target_edit.setText('localhost')" \
+  'eval w._diagnose_dialog.start()' \
+  'wait-until 60 not w._diagnose_dialog.is_running()' \
+  'eval w._diagnose_dialog.status_label.text()' \
+  'shot 15-diagnose _diagnose_dialog' \
+  'eval w._diagnose_dialog.report()' \
+  'quit' \
+| xvfb-run -a --server-args="-screen 0 1400x900x24" \
+    python3 -u .claude/skills/run-dhcp-lease-inspector/driver.py
+```
+
+Verified: `1 passed, 2 failed, 6 skipped, 4 informational.` (ping fails because
+this container has no `ping` binary; TCP 135 is refused; the six DCOM/WMI steps
+are skipped). `click diagnose_btn` is safe — the window is modeless.
+
 ## Run: direct invocation (no GUI)
 
 Most changes land in `scoring.py`, `subnet.py` or `checks.py`, which are pure
@@ -215,7 +239,7 @@ pip install -r requirements.txt -r requirements-dev.txt   # adds pytest, pytest-
 python3 -m pytest
 ```
 
-178 tests, ~1 s, no display needed (`QT_QPA_PLATFORM=offscreen` is set in
+217 tests, ~1 s, no display needed (`QT_QPA_PLATFORM=offscreen` is set in
 `tests/conftest.py`). Every Windows call is mocked at `run_powershell` /
 `run_hidden` / `_ping`, so they run on Linux; the GUI tests drive the real
 `MainWindow` and the real `ScanWorker` threads. Each test gets its own

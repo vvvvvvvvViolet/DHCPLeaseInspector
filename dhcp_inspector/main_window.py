@@ -29,6 +29,7 @@ from PyQt5.QtWidgets import (
 )
 
 from . import ad_utils, config, export_excel, history, scoring, subnet
+from .diagnose_window import DiagnoseDialog
 from .software_window import SoftwareWindow, edit_policy
 from .worker import ScanWorker
 
@@ -234,6 +235,7 @@ class MainWindow(QMainWindow):
         self._prev_run = None         # snapshot loaded when a scan starts
         self._credential = None       # (username, password) in memory only
         self._software_window = None  # the open inventory, if any
+        self._diagnose_dialog = None  # the open diagnostic, if any
         self._warning = ""            # degraded-result note for the summary
 
         central = QWidget()
@@ -294,6 +296,12 @@ class MainWindow(QMainWindow):
             "Inventory checks each computer against."
         )
         scan_row.addWidget(self.policy_btn)
+        self.diagnose_btn = QPushButton("Diagnose")
+        self.diagnose_btn.setToolTip(
+            "Check one computer step by step (DNS, ping, RPC port, DCOM, each WMI "
+            "class) to see exactly why a column comes back empty."
+        )
+        scan_row.addWidget(self.diagnose_btn)
         scan_row.addStretch(1)
         scan_row.addWidget(QLabel("Show:"))
         self.status_filter = QComboBox()
@@ -350,6 +358,7 @@ class MainWindow(QMainWindow):
         self.export_btn.clicked.connect(self.on_export_excel)
         self.software_btn.clicked.connect(self.on_software)
         self.policy_btn.clicked.connect(lambda: edit_policy(self))
+        self.diagnose_btn.clicked.connect(self.on_diagnose)
         self.status_filter.currentTextChanged.connect(self.apply_status_filter)
 
     # ----- summary -----
@@ -686,6 +695,25 @@ class MainWindow(QMainWindow):
             return
 
         QMessageBox.information(self, "Export complete", f"Saved to {path}")
+
+    # ----- diagnose -----
+
+    def on_diagnose(self):
+        """Open the diagnostic for the selected row (or a blank one to type into)."""
+        current = self._diagnose_dialog
+        if current is not None and current.is_running():
+            # Never replace a window whose check is still running: dropping
+            # the last reference to a running QThread aborts the program.
+            current.show()
+            current.raise_()
+            current.activateWindow()
+            return
+        target = ""
+        rows = sorted({index.row() for index in self.table.selectedIndexes()})
+        if rows and self.table.item(rows[0], 0) is not None:
+            target = self.table.item(rows[0], 0).text().strip()
+        self._diagnose_dialog = DiagnoseDialog(target, self._credential, self)
+        self._diagnose_dialog.show()
 
     # ----- software inventory -----
 

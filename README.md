@@ -84,6 +84,20 @@ Single-page UI with three buttons:
   consistency check, and possibly a repair, on every MSI product on the
   target. Expect seconds to a few minutes per machine; asks before
   inventorying more than 20.
+- **Diagnose** — checks one computer step by step, so you can see *why* a
+  column comes back empty instead of just "Error". It runs each layer on its
+  own, timing it and keeping the real error text: DNS lookup, ping, TCP 135
+  (the RPC port DCOM needs), reverse DNS, NetBIOS, ARP, SMB, then over DCOM
+  the session itself and each WMI class the scan uses (computer system, OS,
+  network adapters, hotfixes) plus the registry read Software Inventory
+  relies on. One failing class does not hide the others, and when port 135 is
+  unreachable the WMI steps are skipped rather than waiting out their
+  timeouts. Known failures (access denied, bad credentials, RPC unavailable,
+  name not found, damaged WMI repository) come with a plain-language
+  suggestion. The button opens on the selected row, or blank to type a name or
+  IP; **Copy report** puts a plain-text report on the clipboard to paste into
+  a message — it states which account was used but never contains the
+  password.
 - **Software Policy** — you maintain two lists yourself, in the app (no code
   change): **forbidden** software (e.g. AnyDesk, uTorrent) and **required**
   software (e.g. your antivirus). Open it from the **Software Policy**
@@ -199,6 +213,8 @@ dhcp_inspector/
   software.py          # installed-software inventory via StdRegProv
   software_window.py   # inventory window, policy editor, background worker
   policy.py            # forbidden / required software lists and their evaluation
+  diagnose.py          # step-by-step check of one machine + the text report
+  diagnose_window.py   # the Diagnose window and its background worker
   checks.py           # DNS/PTR+ping probe, and the WMI check over DCOM
   scoring.py           # uptime/last-logon formatting + AD domain health + status
   config.py            # user settings (thresholds, parallelism, timeouts)
