@@ -131,6 +131,17 @@ pip install -r requirements.txt
 python main.py
 ```
 
+## Tests
+
+```
+pip install -r requirements.txt -r requirements-dev.txt
+python -m pytest
+```
+
+The suite mocks every Windows call (PowerShell, `ping`, `nbtstat`, `arp`), so
+it runs on any OS with no display, in about a second. GitHub Actions runs it
+on Python 3.10, 3.11 and 3.12 for every push and pull request.
+
 ## Build a standalone .exe
 
 PyInstaller must run on Windows (it does not cross-compile), so pick one:

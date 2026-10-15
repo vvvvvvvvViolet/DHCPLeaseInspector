@@ -689,8 +689,9 @@ class MainWindow(QMainWindow):
         whose last scan reached WMI — inventory uses the same DCOM path, so
         rows that never answered WMI would only add timeouts.
         """
-        selected = sorted({index.row() for index in self.table.selectedIndexes()})
-        rows = [r for r in selected if not self.table.isRowHidden(r)]
+        # QTableView.selectedIndexes() already leaves out hidden (filtered)
+        # rows, so a filtered-out row is never sent even if it was selected.
+        rows = sorted({index.row() for index in self.table.selectedIndexes()})
         how = "selected"
         if not rows:
             how = "reachable over WMI"

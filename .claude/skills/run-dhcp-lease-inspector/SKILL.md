@@ -195,9 +195,27 @@ and `checks._ping` / `checks.netbios_name` / `checks.arp_mac` are the seams.
 
 ## Test
 
-There is no test suite in this repo (no `tests/`, and CI only builds the
-`.exe`). The driver and the direct-invocation snippet above are the smoke
-tests.
+```bash
+pip install -r requirements.txt -r requirements-dev.txt   # adds pytest, pytest-timeout
+python3 -m pytest
+```
+
+121 tests, ~1 s, no display needed (`QT_QPA_PLATFORM=offscreen` is set in
+`tests/conftest.py`). Every Windows call is mocked at `run_powershell` /
+`run_hidden` / `_ping`, so they run on Linux; the GUI tests drive the real
+`MainWindow` and the real `ScanWorker` threads. Each test gets its own
+`%LOCALAPPDATA%` and default settings. `pytest.ini` sets a 30 s per-test
+timeout so a hang fails instead of stalling the run.
+
+CI (`.github/workflows/tests.yml`) runs the suite on Python 3.10, 3.11 and 3.12.
+**3.10 matters**: it rejects the 7-digit fractional seconds PowerShell emits, so
+timestamp bugs only reproduce there. To check locally without installing it:
+`uv run --no-project --python 3.10 --with pytest --with pytest-timeout --with PyQt5 --with openpyxl python -m pytest`.
+
+Add a regression test for anything you fix. When a test passes on its first run,
+break the code on purpose and confirm it fails — several of these tests were
+checked that way, and it is how the `/8` freeze and the 3.10 timestamp bug were
+found.
 
 ## Gotchas
 
@@ -205,6 +223,10 @@ tests.
   package index starts empty, so skipping it fails with `E: Unable to locate
   package libxkbcommon-x11-0` — and pip packages vanish on recycle too, so
   re-run Setup.
+- **Never run something that edits source files while also copying the tree.**
+  A mutation run and a "copy the repo for the 3.10 check" ran concurrently and
+  the copy captured a deliberately broken `subnet.py`, producing a convincing
+  but meaningless failure. Run them one after the other.
 - **Every table here needs `setSortIndicator(0, Qt.AscendingOrder)`.** Qt's
   implicit indicator is column 0 *descending*, applied the moment sorting is
   switched on. Both the main table and the inventory window shipped Z→A until

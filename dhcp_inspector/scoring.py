@@ -5,11 +5,21 @@ from datetime import datetime
 from . import config
 
 
+# .NET's round-trip format ("o") writes seven fractional-second digits, and
+# Python before 3.11 accepts at most six (nor a trailing "Z"). Every
+# timestamp we get from PowerShell is in that format.
+_EXTRA_FRACTION = re.compile(r"(\.\d{6})\d+")
+
+
 def _parse_dt(value: str | None) -> datetime | None:
     if not value:
         return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    text = _EXTRA_FRACTION.sub(r"\1", text)
     try:
-        return datetime.fromisoformat(value)
+        return datetime.fromisoformat(text)
     except ValueError:
         return None
 
