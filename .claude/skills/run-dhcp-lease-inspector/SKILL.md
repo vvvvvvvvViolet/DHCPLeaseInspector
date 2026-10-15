@@ -170,9 +170,8 @@ without the save dialog — check its sheets with
 
 `policy.save_policy(...)` before opening the inventory (or `eval` it in the
 driver) makes `feed-software` rows come back judged. `Policy…` / `Software
-Policy` open a modal editor, so use `click-modal policy_btn <name>`. Add
-`"in_ad"`-style fakes are not needed here — a result is just
-`{"computer", "ok", "partial", "error", "apps": [...]}`. A real inventory
+Policy` open a modal editor, so use `click-modal policy_btn <name>`. A fed
+result needs only `{"computer", "ok", "partial", "error", "apps": [...]}`. A real inventory
 started by `click software_btn` also appends a "(scan failed)" row on Linux;
 that is expected, not a bug in the policy code.
 
