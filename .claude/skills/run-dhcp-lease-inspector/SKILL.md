@@ -65,8 +65,9 @@ blank frame means the window never mapped.
 
 Commands: `state`, `headers`, `table [n]`, `set <attr> <text>`,
 `check <attr> <0|1>`, `pick <attr> <text>`, `click <attr>`,
-`click-modal <attr> <name>`, `feed <row> <json>`, `wait <s>`, `wait-scan [s]`,
-`sorting <0|1>`, `sort <col>`, `shot <name>`, `eval <python>`, `quit`.
+`click-modal <attr> <name>`, `feed <row> <json>`, `feed-software <json>`,
+`wait <s>`, `wait-scan [s]`, `wait-until <s> <expr>`, `sorting <0|1>`,
+`sort <col>`, `shot <name> [attr]`, `eval <python>`, `quit`.
 `<attr>` is a `MainWindow` attribute — `eval [a for a in dir(w) if a.endswith('_btn')]`
 lists the buttons.
 
@@ -128,6 +129,43 @@ Verified: rows come back `Ready` (`#c8e6c9` green), `Patch Overdue` and
 `Not in AD`; the summary reads `Total 4 | Ready 1 | Domain Issue 1 | Patch
 Overdue 1 | Not in AD 1`.
 
+## Run: Software Inventory window
+
+`software_btn` opens a separate modeless window (`w._software_window`). With no
+row selected it targets rows whose last scan reached WMI, so `feed` rows with
+`"wmi_ok": true` first. On Linux the real inventory fails (no `powershell`),
+which still exercises targeting, the worker and the red failure rows:
+
+```bash
+python3 - > /tmp/sw.txt <<'PY2'
+import json
+print("set subnet_edit 10.20.30.1-3"); print("click load_subnet_btn")
+for i, (name, ok) in enumerate([("A-C14-PROV", True), ("V-D35-MMI", True), ("PRINTER-2", False)]):
+    print("feed %d %s" % (i, json.dumps({"computer_name": name, "ip": "10.20.30.%d" % (i + 1),
+                                         "ping": True, "wmi_ok": ok})))
+print("click software_btn")
+print("eval w._software_window._targets")
+print("wait-until 30 not w._software_window.is_running()")
+print("eval w._software_window.summary_label.text()")
+print("feed-software " + json.dumps({"computer": "LAB-PC", "ok": True, "partial": False, "error": None,
+    "apps": [{"name": "Google Chrome", "version": "129.0", "publisher": "Google LLC",
+              "install_date": "2026-09-01", "scope": "Machine"}]}))
+print("eval w._software_window.filter_edit.setText('chrome')")
+print("eval w._software_window.export_to('/tmp/inventory.xlsx')")
+print("shot 07-software _software_window")
+print("quit")
+PY2
+xvfb-run -a --server-args="-screen 0 1400x900x24" \
+  python3 -u .claude/skills/run-dhcp-lease-inspector/driver.py < /tmp/sw.txt
+```
+
+Verified: `_targets` is `['A-C14-PROV', 'V-D35-MMI']` (PRINTER-2 never reached
+WMI), the summary reads `Computers 2/2 | OK 0 | Failed 2 | …`, and
+`feed-software` then adds a Chrome row. `export_to(path)` writes the workbook
+without the save dialog — check its sheets with
+`python3 -c "from openpyxl import load_workbook as L; print(L('/tmp/inventory.xlsx').sheetnames)"`
+→ `['Software', 'Summary', 'Scan Status']`.
+
 ## Run: direct invocation (no GUI)
 
 Most changes land in `scoring.py`, `subnet.py` or `checks.py`, which are pure
@@ -147,8 +185,8 @@ print(checks._NBT_NAME.search('  A-C14-PROV  <00>  UNIQUE  Registered').group(1)
 
 Patch the Windows boundary with `unittest.mock.patch` to test the rest:
 `checks.resolve_and_ping`, `checks.check_computer`, `ad_utils.load_ad_computers`,
-`dhcp_leases.load_leases`, and `checks._ping` / `checks.netbios_name` are the
-seams.
+`dhcp_leases.load_leases`, `software.run_powershell` (feed it the script's JSON),
+and `checks._ping` / `checks.netbios_name` / `checks.arp_mac` are the seams.
 
 ## Run: human path
 
@@ -162,6 +200,15 @@ There is no test suite in this repo (no `tests/`, and CI only builds the
 tests.
 
 ## Gotchas
+
+- **Fresh containers need `apt-get update` before the install line.** The
+  package index starts empty, so skipping it fails with `E: Unable to locate
+  package libxkbcommon-x11-0` — and pip packages vanish on recycle too, so
+  re-run Setup.
+- **Every table here needs `setSortIndicator(0, Qt.AscendingOrder)`.** Qt's
+  implicit indicator is column 0 *descending*, applied the moment sorting is
+  switched on. Both the main table and the inventory window shipped Z→A until
+  this was set explicitly; a new table will too.
 
 - **`feed` must run with table sorting off, and leaves it off.** `on_row_ready`
   fills a row cell by cell and row indices are positional. With sorting live,

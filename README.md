@@ -68,6 +68,22 @@ Single-page UI with three buttons:
   `Error` / `No DNS`, so a follow-up pass doesn't re-do the whole fleet.
 - **Export Excel** — saves the table to an `.xlsx` report, following the
   on-screen sort order and status filter, with rows colored by status.
+- **Software Inventory** — lists installed software on the selected rows,
+  or, with nothing selected, on every row whose last scan reached WMI. Runs
+  in its own window (the main table stays usable), with a filter box to find
+  e.g. every machine with Chrome, and **Export Excel** writing three sheets:
+  **Software** (one row per computer × title, with autofilter), **Summary**
+  (each title once, with how many computers have it and which versions —
+  spot version drift or unapproved software), and **Scan Status** (which
+  machines succeeded, failed, or returned a partial list, so a gap in the
+  inventory is never silent).
+  Reads the registry Uninstall keys over the same DCOM session as the other
+  checks — the 64-bit and 32-bit views plus per-user installs of signed-in
+  users — matching what "Programs and Features" shows. It deliberately does
+  **not** use `Win32_Product`, which makes Windows Installer run a
+  consistency check, and possibly a repair, on every MSI product on the
+  target. Expect seconds to a few minutes per machine; asks before
+  inventorying more than 20.
 - **Credentials** — optionally run the WMI checks as a different account
   (e.g. a domain admin) instead of the user who launched the app. This is
   usually what makes the DHCP / OS / Uptime columns populate: without
@@ -78,9 +94,10 @@ Single-page UI with three buttons:
   `PSCredential` for `New-CimSession`.
 - **Settings** — stale-password and patch-overdue thresholds, the DHCP
   server to read lease names from, the maximum subnet size, ping/WMI
-  parallelism and timeouts, and whether to attempt WMI on ping-failed
-  machines (off by default; turn on to find hosts that block ICMP but
-  allow WMI). Saved to `%LOCALAPPDATA%\DHCPLeaseInspector\settings.json`.
+  parallelism and timeouts, the software-inventory timeout, and whether to
+  attempt WMI on ping-failed machines (off by default; turn on to find hosts
+  that block ICMP but allow WMI). Saved to
+  `%LOCALAPPDATA%\DHCPLeaseInspector\settings.json`.
 
 A summary line above the table live-counts every status (Total / Ready /
 Domain Issue / Patch Overdue / Not in AD / Offline / Error / No DNS). Rows are
@@ -144,11 +161,13 @@ dhcp_inspector/
   ad_utils.py         # Get-ADComputer: names + domain/OS/enabled/pwd age/last logon
   subnet.py            # expands CIDRs/ranges into the addresses to probe
   dhcp_leases.py       # reads the DHCP server's lease table (ip -> name/MAC)
+  software.py          # installed-software inventory via StdRegProv
+  software_window.py   # inventory window + its background worker
   checks.py           # DNS/PTR+ping probe, and the WMI check over DCOM
   scoring.py           # uptime/last-logon formatting + AD domain health + status
   config.py            # user settings (thresholds, parallelism, timeouts)
   history.py           # saves each run so the next one can show what changed
-  export_excel.py      # writes the results table to .xlsx
+  export_excel.py      # status table and software inventory to .xlsx
   process_utils.py     # hidden subprocess + UTF-8 PowerShell helpers
   worker.py             # QThread: ping sweep phase, then WMI phase, + AD merge
   main_window.py        # PyQt5 single-page window (Load AD / Check Status / Export Excel)

@@ -29,7 +29,17 @@ Run it under xvfb — see SKILL.md. Commands:
   wait-scan [seconds]      block until the scan worker finishes (default 60)
   sorting <0|1>            turn table sorting on/off (feed forces it off)
   sort <col>               sort by a column index, e.g. sort 1 for IP
-  shot <name>              screenshot the main window to shots/<name>.png
+  shot <name> [attr]       screenshot the main window (or the MainWindow attribute
+                           <attr>, e.g. _software_window) to shots/<name>.png
+  wait-until <s> <expr>    pump events until the python expr is truthy (or s secs),
+                           e.g. wait-until 30 not w._software_window.is_running()
+  feed-software <json>     push one inventory result into the open Software
+                           Inventory window — like `feed`, the only way to see a
+                           populated inventory on Linux. Shape is what
+                           software.list_software returns:
+                           {"computer":"PC-1","ok":true,"partial":false,"error":null,
+                            "apps":[{"name":"7-Zip","version":"24.08","publisher":"Igor
+                            Pavlov","install_date":"2026-09-01","scope":"Machine"}]}
   eval <python>            escape hatch; `w` is the MainWindow, `app` the QApplication
   quit                     close cleanly (EOF does this too)
 """
@@ -229,7 +239,31 @@ def cmd_sort(arg):
 
 
 def cmd_shot(arg):
-    _shot(arg.strip() or "shot")
+    name, _, attr = arg.strip().partition(" ")
+    target = _widget(attr.strip()) if attr.strip() else None
+    _shot(name or "shot", target)
+
+
+def cmd_wait_until(arg):
+    seconds, _, expr = arg.strip().partition(" ")
+    deadline = time.time() + float(seconds)
+    while time.time() < deadline:
+        app.processEvents()
+        if eval(expr, {"w": w, "app": app}):
+            _pump(0.2)
+            out(f"condition met: {expr}")
+            return
+        time.sleep(0.05)
+    raise TimeoutError(f"still false after {seconds}s: {expr}")
+
+
+def cmd_feed_software(arg):
+    window = getattr(w, "_software_window", None)
+    if window is None:
+        raise RuntimeError("no Software Inventory window open; click software_btn first")
+    window.on_result(json.loads(arg))
+    app.processEvents()
+    out(f"rows={window.table.rowCount()} summary={window.summary_label.text()!r}")
 
 
 def cmd_eval(arg):
@@ -242,6 +276,7 @@ HANDLERS = {
     "click": cmd_click, "click-modal": cmd_click_modal,
     "feed": cmd_feed, "wait": cmd_wait, "wait-scan": cmd_wait_scan,
     "sorting": cmd_sorting, "sort": cmd_sort,
+    "wait-until": cmd_wait_until, "feed-software": cmd_feed_software,
     "shot": cmd_shot, "eval": cmd_eval,
 }
 

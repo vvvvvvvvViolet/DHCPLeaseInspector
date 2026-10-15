@@ -142,29 +142,10 @@ def resolve_and_ping(target: str, ping_timeout_ms: int | None = None) -> dict:
     }
 
 
-# The computer name is prepended as a $ComputerName assignment (see
-# _build_command). We deliberately do NOT use `param(...)` + a trailing
-# `-ComputerName` argument: with `powershell -Command "<script>"`, anything
-# after the script string is treated as command text, not bound to param(),
-# so $ComputerName would come back null and every machine would fail.
-# Ping is handled in Python (resolve_and_ping); this script is WMI-only.
-_CHECK_SCRIPT = r"""
-$result = [ordered]@{
-    ComputerName = $ComputerName
-    WmiOk = $false
-    Name = $null
-    UserName = $null
-    Mac = $null
-    PartOfDomain = $null
-    Domain = $null
-    DHCPServer = $null
-    OSVersion = $null
-    LastBoot = $null
-    LastPatch = $null
-    RecentHotfixes = $null
-    FirstError = $null
-}
-
+# Shared by every remote script: records the first error into $result and
+# opens a DCOM CIM session ($session, $null on failure), honouring the
+# alternate credentials passed in through the environment.
+_SESSION_PREAMBLE = r"""
 function Note-Error($err) {
     if ($null -eq $result.FirstError) {
         $result.FirstError = ($err | Out-String).Trim()
@@ -191,7 +172,31 @@ try {
     }
     $session = New-CimSession @cimArgs
 } catch { Note-Error $_ }
+"""
 
+# The computer name is prepended as a $ComputerName assignment (see
+# _build_command). We deliberately do NOT use `param(...)` + a trailing
+# `-ComputerName` argument: with `powershell -Command "<script>"`, anything
+# after the script string is treated as command text, not bound to param(),
+# so $ComputerName would come back null and every machine would fail.
+# Ping is handled in Python (resolve_and_ping); this script is WMI-only.
+_CHECK_SCRIPT = r"""
+$result = [ordered]@{
+    ComputerName = $ComputerName
+    WmiOk = $false
+    Name = $null
+    UserName = $null
+    Mac = $null
+    PartOfDomain = $null
+    Domain = $null
+    DHCPServer = $null
+    OSVersion = $null
+    LastBoot = $null
+    LastPatch = $null
+    RecentHotfixes = $null
+    FirstError = $null
+}
+""" + _SESSION_PREAMBLE + r"""
 if ($session) {
     try {
         $cs = Get-CimInstance -CimSession $session -ClassName Win32_ComputerSystem -OperationTimeoutSec 15 -ErrorAction Stop

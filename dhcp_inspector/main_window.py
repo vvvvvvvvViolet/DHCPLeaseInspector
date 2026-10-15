@@ -29,6 +29,7 @@ from PyQt5.QtWidgets import (
 )
 
 from . import ad_utils, config, export_excel, history, scoring, subnet
+from .software_window import SoftwareWindow
 from .worker import ScanWorker
 
 HEADERS = ["Computer", "IP", "MAC", "Ping", "Domain", "User Login", "DHCP Server",
@@ -54,6 +55,11 @@ _STATUSES = ["Ready", "Domain Issue", "Patch Overdue", "Not in AD",
              "Offline", "Error", "No DNS"]
 _FAILED_STATUSES = ("Offline", "Error", "No DNS")
 _WARN_STATUSES = ("Domain Issue", "Patch Overdue", "Not in AD")
+
+# Inventory runs over the same DCOM path as the WMI check, so only rows
+# whose last scan reached WMI are worth sending; this marks them.
+_WMI_OK_ROLE = Qt.UserRole + 1
+_CONFIRM_SOFTWARE_OVER = 20
 
 
 def _ip_sort_key(text: str):
@@ -128,6 +134,16 @@ class SettingsDialog(QDialog):
         self.wmi_timeout.setValue(settings.wmi_timeout_s)
         form.addRow("WMI timeout per machine (s):", self.wmi_timeout)
 
+        self.software_timeout = QSpinBox()
+        self.software_timeout.setRange(30, 3600)
+        self.software_timeout.setSingleStep(30)
+        self.software_timeout.setValue(settings.software_timeout_s)
+        self.software_timeout.setToolTip(
+            "Software inventory reads hundreds of registry values per machine, "
+            "so it needs far longer than a status check."
+        )
+        form.addRow("Software scan timeout per machine (s):", self.software_timeout)
+
         self.wmi_only_ping_ok = QCheckBox("Skip WMI for machines that failed ping")
         self.wmi_only_ping_ok.setChecked(settings.wmi_only_ping_ok)
         self.wmi_only_ping_ok.setToolTip(
@@ -151,6 +167,7 @@ class SettingsDialog(QDialog):
             max_subnet_hosts=self.max_subnet_hosts.value(),
             dhcp_server=self.dhcp_server.text().strip(),
             wmi_timeout_s=self.wmi_timeout.value(),
+            software_timeout_s=self.software_timeout.value(),
             wmi_only_ping_ok=self.wmi_only_ping_ok.isChecked(),
         ))
 
@@ -216,6 +233,7 @@ class MainWindow(QMainWindow):
         self._status_counts = Counter()  # live counts for the summary line
         self._prev_run = None         # snapshot loaded when a scan starts
         self._credential = None       # (username, password) in memory only
+        self._software_window = None  # the open inventory, if any
         self._warning = ""            # degraded-result note for the summary
 
         central = QWidget()
@@ -264,6 +282,12 @@ class MainWindow(QMainWindow):
         scan_row.addWidget(self.check_status_btn)
         scan_row.addWidget(self.recheck_btn)
         scan_row.addWidget(self.cancel_btn)
+        self.software_btn = QPushButton("Software Inventory")
+        self.software_btn.setToolTip(
+            "List installed software on the selected rows — or, with nothing "
+            "selected, on every row whose last scan reached WMI."
+        )
+        scan_row.addWidget(self.software_btn)
         scan_row.addStretch(1)
         scan_row.addWidget(QLabel("Show:"))
         self.status_filter = QComboBox()
@@ -298,6 +322,7 @@ class MainWindow(QMainWindow):
         for col, width in enumerate(_COLUMN_WIDTHS):
             self.table.setColumnWidth(col, width)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
         # Explicit A->Z default: re-enabling sorting re-applies the current
         # indicator, and Qt's implicit default is column 0 descending.
         self.table.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
@@ -317,6 +342,7 @@ class MainWindow(QMainWindow):
         self.recheck_btn.clicked.connect(self.on_recheck_failed)
         self.cancel_btn.clicked.connect(self.on_cancel)
         self.export_btn.clicked.connect(self.on_export_excel)
+        self.software_btn.clicked.connect(self.on_software)
         self.status_filter.currentTextChanged.connect(self.apply_status_filter)
 
     # ----- summary -----
@@ -556,6 +582,8 @@ class MainWindow(QMainWindow):
                 _MAC_COL: mac_tip, _USER_COL: user_tip}
         for col, value in enumerate(values):
             item = _IPItem(value) if col in (0, 1) else QTableWidgetItem(value)
+            if col == 0:
+                item.setData(_WMI_OK_ROLE, bool(result.get("wmi_ok")))
             item.setBackground(color)
             # Full failure reason (e.g. Access Denied vs timeout) lives in the
             # tooltip so it isn't lost behind a bare "-" or "Offline".
@@ -652,10 +680,68 @@ class MainWindow(QMainWindow):
 
         QMessageBox.information(self, "Export complete", f"Saved to {path}")
 
+    # ----- software inventory -----
+
+    def _software_targets(self) -> tuple[list[str], str]:
+        """The computers to inventory, and a phrase saying how they were chosen.
+
+        Selected (visible) rows win. With no selection, every visible row
+        whose last scan reached WMI — inventory uses the same DCOM path, so
+        rows that never answered WMI would only add timeouts.
+        """
+        selected = sorted({index.row() for index in self.table.selectedIndexes()})
+        rows = [r for r in selected if not self.table.isRowHidden(r)]
+        how = "selected"
+        if not rows:
+            how = "reachable over WMI"
+            rows = [
+                r for r in range(self.table.rowCount())
+                if not self.table.isRowHidden(r)
+                and self.table.item(r, 0) is not None
+                and self.table.item(r, 0).data(_WMI_OK_ROLE)
+            ]
+        targets = []
+        for row in rows:
+            name = self.table.item(row, 0).text().strip()
+            if name and name not in targets:
+                targets.append(name)
+        return targets, how
+
+    def on_software(self):
+        if self._software_window is not None and self._software_window.is_running():
+            self._software_window.show()
+            self._software_window.raise_()
+            self._software_window.activateWindow()
+            return
+
+        targets, how = self._software_targets()
+        if not targets:
+            QMessageBox.information(
+                self, "Software Inventory",
+                "Select the computers to inventory, or run Check Status first — "
+                "with nothing selected, the inventory covers rows whose last scan "
+                "reached WMI, and none have yet.",
+            )
+            return
+        if len(targets) > _CONFIRM_SOFTWARE_OVER:
+            answer = QMessageBox.question(
+                self, "Software Inventory",
+                f"Inventory installed software on {len(targets)} computers ({how})?\n\n"
+                "Each machine takes from a few seconds to a few minutes.",
+            )
+            if answer != QMessageBox.Yes:
+                return
+
+        self._software_window = SoftwareWindow(targets, self._credential, self)
+        self._software_window.show()
+        self._software_window.start()
+
     def closeEvent(self, event):
         if self._worker is not None and self._worker.isRunning():
             self._worker.stop()
             self._worker.wait(5000)
+        if self._software_window is not None and self._software_window.is_running():
+            self._software_window._worker.stop()
         event.accept()
 
 
